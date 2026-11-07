@@ -48,6 +48,8 @@ dotnet publish src/ZhuyinToggle/ZhuyinToggle.csproj -c Release -r win-x64 --self
 
 目前自動化測試檢查快捷鍵資料規則及模擬註冊衝突、儲存失敗時的替換行為，不代表 Windows 全域註冊、設定錄製、自動啟動或注音切換通過實機驗收。GitHub Actions 的產物是實驗建置，不是 Release。
 
+已加入 16、20、32 像素圖示產生器及色彩／尺寸測試；程式目前只顯示灰色「?」未知狀態，絕不將未驗證的輸出判定為繁體或簡體。另有 UI Automation 概念驗證，預設唯讀；候選選取操作單機可用但會改變前景焦點，並非正式方案，見[測試紀錄](docs/ime-validation.md)。
+
 ## 開源授權
 
 本專案採用 MIT License 授權，歡迎自由使用、修改與貢獻。

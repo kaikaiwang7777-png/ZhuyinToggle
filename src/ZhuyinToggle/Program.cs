@@ -32,6 +32,7 @@ internal sealed class TrayContext : ApplicationContext
     private const int WM_HOTKEY = 0x0312;
     private readonly HotkeyWindow window;
     private readonly NotifyIcon tray;
+    private readonly Icon unknownIcon;
     private readonly ContextMenuStrip menu = new();
     private readonly System.Windows.Forms.Timer clickTimer = new() { Interval = SystemInformation.DoubleClickTime };
     private readonly HotkeyCoordinator hotkeys;
@@ -43,7 +44,8 @@ internal sealed class TrayContext : ApplicationContext
     {
         window = new HotkeyWindow(() => MessageBox.Show("切換功能尚未驗證，暫不可用。", "ZhuyinToggle"));
         hotkeys = new HotkeyCoordinator(new WindowsHotkeyRegistration(window.Handle), SaveHotkey);
-        tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "ZhuyinToggle：輸出模式尚未確認", ContextMenuStrip = menu, Visible = true };
+        unknownIcon = TrayIconFactory.Create(OutputState.Unknown, Math.Max(16, SystemInformation.SmallIconSize.Width));
+        tray = new NotifyIcon { Icon = unknownIcon, Text = "ZhuyinToggle：輸出模式尚未確認", ContextMenuStrip = menu, Visible = true };
         menu.Items.Add("切換繁簡（尚未驗證）", null, (_, _) => Explain());
         menu.Items.Add("目前模式：無法確認").Enabled = false;
         menu.Items.Add("快捷鍵設定", null, (_, _) => ShowSettings());
@@ -100,7 +102,7 @@ internal sealed class TrayContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         hotkeys.Dispose();
-        form?.Dispose(); clickTimer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); window.Dispose();
+        form?.Dispose(); clickTimer.Dispose(); tray.Visible = false; tray.Dispose(); unknownIcon.Dispose(); menu.Dispose(); window.Dispose();
         base.ExitThreadCore();
     }
     private sealed class HotkeyWindow : NativeWindow, IDisposable

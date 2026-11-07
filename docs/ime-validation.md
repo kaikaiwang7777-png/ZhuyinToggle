@@ -5,7 +5,7 @@
 | 方式 | 修改前 → 修改後的指定登錄值 | 實際輸出 | 重新選取或重載輸入法 | 結果 |
 |---|---|---|---|---|
 | 原生微軟注音常規頁，繁體 | REG_SZ 0x00000000 | 中國、電腦、學習 | 無 | 繁體輸出觀察成功 |
-| 原生頁選簡體 | REG_SZ 0x00000000 → 0x00000000（選取後回讀） | 中国、电脑、学习 | 無 | 既有記事本立即輸出簡體 |
+| 原生頁選簡體 | REG_SZ 0x00000000 → 0x00000000（命令執行環境讀值；與後續 ProcMon 記錄不一致） | 中国、电脑、学习 | 無 | 既有記事本立即輸出簡體 |
 | 原生頁恢復繁體 | REG_SZ 0x00000000 | 後續 PowerShell 測試前由設定頁恢復 | 無 | 設定頁顯示繁體 |
 | PowerShell Set-ItemProperty -Type String | 0x00000000 → 0x00000001（回讀為 String） | 中國、電腦、學習 | 無 | 本次未立即轉為簡體 |
 | .NET RegistryKey.SetValue | 0x00000000 → 0x00000001（回讀為 String） | 中國、電腦、學習 | 無 | 本次未立即轉為簡體 |
@@ -14,13 +14,31 @@
 
 ## 後續重現與儲存位置調查
 
+**更正：先前「原生設定頁未寫入指定值」的推論不正確。** 下列快照僅描述命令執行環境的讀值，不能當成設定程序沒有寫入的證據。經使用者正常授權的 ProcMon 追蹤確認，`SystemSettings.exe` 在繁→简→繁操作期間，兩次成功對 `HKCU\Software\Microsoft\IME\15.0\IMETC\Enable Simplified Chinese Output` 執行 `RegSetValue`，資料分別為 `REG_SZ 0x00000001`、`REG_SZ 0x00000000`。同一波設定作業還寫入多個其他 IME／CPSS 值；可見 `ctfmon.exe` 查詢該值，但這些事件本身不證明哪個事件導致輸入法即時更新，也不能證明沒有未觀察到的 IPC 或通知。
+
+此次擷取約 67 秒、約 373 萬事件；全量 CSV 僅留在本機私人工作區，未提交公開倉庫。未依據程序出現與否推斷完整的內部呼叫。先前命令工具讀值與設定程序在簡體期間的觀察不一致，其具體隔離或登錄檢視原因尚未確定。
+
+將使用者提供的 `reg add` 命令改從 Windows 桌面「執行」對話框啟動後，在既有記事本觀察到簡體「国、电脑」，再執行還原命令後觀察到「中國、電腦」。與先前命令執行環境不同，這次互動桌面執行產生實際輸出變化；不能僅憑現象斷言原因是某一種隔離機制。
+
+獨立 C# 原型 `tools/RegistryToggleProbe` 從同一互動桌面啟動，檢查既有值為 REG_SZ 且格式合法後，分別寫入並回讀 `0→1→0`；既有記事本透過注音組字依序顯示「中国、电脑」及「中國、電腦」。這是目前一台電腦、一次往返的可重現候選方法，不代表所有應用、使用者工作階段或 Windows 版本均可靠，也不代表可以只靠回讀設定來確認實際輸出；正式程式切換功能仍停用。
+
 - 使用者後來提供的指令是 `reg add` 指定同一機碼、`REG_SZ`、資料 `0x00000001` 或 `0x00000000`；當時的實際輸出證據沒有保存。本次另以該 `reg add` 命令寫入 `0x00000001`，命令成功且 `reg query` 讀回 `REG_SZ 0x00000001`，同一記事本仍輸出「中國、電腦」；隨後以 `reg add` 還原 `0x00000000` 並讀回。此結果僅適用本次環境與操作條件。
 - 本次系統登錄所報版本為 DisplayVersion `26H2`、build `26300.9818`；「使用以前版本的微軟注音輸入法」顯示關閉，測試時未更動。相同記事本中，原生頁選繁體後觀察到「中國、電腦」，選簡體後觀察到「中国、电脑」，選回繁體後觀察到「中國」。未重新選取輸入法；作用中 TSF 設定檔仍未獨立驗證。
 - 對當前使用者 `Software\Microsoft\IME`、`Software\Microsoft\InputMethod` 和 `Software\Microsoft\CTF` 做切換前後快照：未辨識到可歸因於繁簡設定的變更；CTF 有組字計數變動。指定值在簡體期間仍讀為 `REG_SZ 0x00000000`。所檢查的 `Software\Microsoft\Windows\CurrentVersion\AppModel\SystemAppData` 鍵不存在或無法查詢，不能據此說該位置沒有變更。此比較不是完整系統追蹤，也不排除其他登錄位置、檔案、快取或 IPC。
-- 可見同一工作階段存在 `SystemSettings`、`ctfmon` 與 `TextInputHost`，但只有程序存在證據，**尚不知道是哪一程序執行設定寫入或通知**。尚未執行 ProcMon；目前程序的 Administrators SID 是 deny-only，並非已提升的系統管理員；ProcMon 的全系統擷取需要管理員權限。絕不提交原始追蹤或私人資料。
-- [Microsoft TSF 文件](https://learn.microsoft.com/en-us/windows/win32/tsf/predefined-compartments)說明轉換模式 compartment 屬於特定 thread manager；這不是它控制本設定或跨程序可安全修改的證據。尚無經驗證的設定寫入、通知或 C# 重現方法，私有介面相容性也尚無從評估。
+- 可見同一工作階段存在 `SystemSettings`、`ctfmon` 與 `TextInputHost`；ProcMon 已確認設定值由 `SystemSettings` 寫入，尚未確認即時變更通知機制。絕不提交原始追蹤或私人資料。
+- [Microsoft TSF 文件](https://learn.microsoft.com/en-us/windows/win32/tsf/predefined-compartments)說明轉換模式 compartment 屬於特定 thread manager；這不是它控制本設定或跨程序可安全修改的證據。C# 寫入已有單機往返觀察，但可靠的通知方式與私有介面相容性尚無從評估。
+
+## UI Automation 唯讀概念驗證
+
+Windows 26H2 build 26300.9818、簡體中文介面上，已在現有微軟注音設定視窗中觀察到輸出類型 ComboBox 的 AutomationId 為 `SystemSettings_Language_CHTBopomofoIME_OutputLanguage_ComboBox`。獨立 C# 原型 `tools/UiAutomationProbe` 可在指定已知視窗控制代碼後，要求唯一符合的 ComboBox、讀取 SelectionPattern，並在本次讀到「繁体中文」。這是設定頁的顯示選項，不是已獨立驗證的實際輸出狀態。
+
+本次唯讀操作前後前景視窗相同。原型不啟動視窗；預設唯讀，另有必須明確指定的 `--set` 候選操作，僅使用 UI Automation 選取模式。在此版本及簡體中文介面上，選擇簡體與還原繁體後，記事本分別觀察到「中国、电脑」及「中國、電腦」；但兩次操作前後前景視窗均不同，存在焦點干擾。不同 Windows 版本和語言、異常失敗後的狀態還原均為 NOT TESTED。未辨識到唯一目標、選取模式不可用或文字不在已知清單時停止。不可根據單次結果宣稱 UIA 切換可靠，更不可將畫面座標作正式方案。
 
 瀏覽器輸入、前景視窗 TSF 設定檔識別、實際通知機制與不同 Windows 版本相容性尚未測試。不得把登錄讀寫成功視為輸出切換成功。未完成實際驗收前不得發布 v0.1.0。
+
+## 獨立功能測試
+
+`tools/HotkeySmoke` 在同一 Windows 互動工作階段以獨立隱藏視窗註冊 `Win+Alt+C` 與 `Ctrl+Shift+F11`，分別收到 `WM_HOTKEY`；第二次註冊同一組合被拒絕，錯誤碼 1409；程式結束時執行 UnregisterHotKey。這是獨立測試程式的觀察，不等於產品的快捷鍵錄製、衝突提示、重啟保存或結束釋放均已實機驗收。圖示在 16、20、32 像素做了尺寸與背景色自動檢查，小尺寸視覺清晰度與系統匣動態切換仍未實機驗收。
 
 ## 實驗腳本
 

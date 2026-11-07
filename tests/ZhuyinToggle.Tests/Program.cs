@@ -11,6 +11,27 @@ Check(!new Hotkey(0, Keys.C).IsValid, "modifier is required");
 Check(!new Hotkey(16, Keys.C).IsValid, "unknown modifier must be rejected");
 Check(!new Hotkey(2, Keys.ShiftKey).IsValid, "modifier cannot be the main key");
 Check(new Hotkey(6, Keys.F12).IsValid, "Ctrl+Shift+F12 should be valid");
+foreach (int size in new[] { 16, 20, 32 })
+foreach (var state in Enum.GetValues<OutputState>())
+{
+    using var icon = TrayIconFactory.Create(state, size);
+    Check(icon.Width == size && icon.Height == size, "icon dimension");
+    using var bitmap = icon.ToBitmap();
+    var corner = bitmap.GetPixel(0, 0);
+    Check(state switch {
+        OutputState.Traditional => corner.B > corner.G && corner.B > corner.R,
+        OutputState.Simplified => corner.G > corner.B && corner.G > corner.R,
+        _ => Math.Abs(corner.R - corner.B) < 20
+    }, "icon background color");
+    int brightPixels = 0;
+    for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            var color = bitmap.GetPixel(x, y);
+            if (color.R > 200 && color.G > 200 && color.B > 200 && color.A > 0) brightPixels++;
+        }
+    Check(brightPixels > 0, "icon must contain a visible light glyph");
+}
 var registrations = new FakeRegistration();
 bool failSave = false;
 using (var manager = new HotkeyCoordinator(registrations, _ => { if (failSave) throw new IOException("simulated"); }))
