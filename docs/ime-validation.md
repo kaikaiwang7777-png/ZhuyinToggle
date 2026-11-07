@@ -89,3 +89,16 @@ Windows 26H2 build 26300.9818、簡體中文介面上，已在現有微軟注音
 ## 實驗腳本
 
 `tools/Test-ImeSetting.ps1` 預設只讀取；`-Run` 僅供互動式調查，不是產品切換實作。腳本寫入前會建立原值備份並嘗試在結束時還原；若程序強制終止，請依備份手動檢查並還原。請勿將備份提交公開倉庫。
+
+## 焦點對照（單機、探索性）
+
+同一個互動工作階段與記事本，使用實體注音鍵位組字；每組由原生設定頁選簡體再選繁體，並在記事本確認「電腦」作為基準。使用唯讀 `GetForegroundWindow`、`GetWindowThreadProcessId`、`GetGUIThreadInfo` 及 `GetKeyboardLayout` 以約 50 ms 取樣；取樣可能漏掉短暫事件，HKL 不足以證明 Microsoft Bopomofo 身分。本輪未獨立取得記事本 TSF 作用中設定檔，因此身分仍有驗證限制。
+
+- A：記事本前景及輸入焦點取樣保持不變，產品快捷鍵寫入簡體；實際為「電腦」「中國」。這次並非即時生效。
+- B：另由繁體基準寫入簡體，切至檔案總管再回到記事本，前景視窗確有變化；實際為「电脑」「中国」。這是一次觀察，並不證明前景切換為必要條件。
+- C：另由繁體基準寫入簡體，Ctrl+F 開啟記事本搜尋框，之後關閉並回編輯區；取樣中前景視窗始終為同一記事本，而焦點 HWND 由編輯區切到搜尋框再返回。搜尋框中曾組字輸入「电脑」「中国」，回編輯區後亦得到「电脑」「中国」。由於搜尋框曾接收組字，不能排除該額外操作的作用；此單次結果不證明僅改焦點就足夠，也不證明 TSF 內部機制。
+- D：本輪使用原生設定頁建立並還原繁體，最終確認「電腦」。未在此輪單獨完成簡體和繁體兩端的完整控制組；先前原生頁往返結果見上節。
+
+C 組的搜尋框沒有如預期以 Escape 關閉，測試文字先輸入了搜尋框，之後以畫面所見關閉按鈕關閉；此步驟是測試操作，不是產品方案。兩詞輸出與焦點觀察為單次探索，未驗證十次往返、游標不受影響、跨版本或 Chrome。Chrome 實測目前未完成。已恢復繁體，沒有將焦點切換整合至產品。
+
+Microsoft 文件將 [ITfThreadMgr](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nn-msctf-itfthreadmgr) 定義為管理文件內容焦點的 TSF thread manager；[ITfThreadMgrEventSink](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nn-msctf-itfthreadmgreventsink) 與 [ITfThreadFocusSink](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nn-msctf-itfthreadfocussink) 分別提供 thread manager 事件與執行緒 UI 焦點通知。[ITfCompartmentMgr](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nn-msctf-itfcompartmentmgr) 的作用範圍取決於取得方式；[GetActiveProfile](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nf-msctf-itfinputprocessorprofilemgr-getactiveprofile) 可查作用中設定檔，但這些文件都沒有證明從本程序可要求另一程序重新讀取這個微軟注音繁簡設定。沒有確認公開支援且不搶焦點的更新方法，不猜測性廣播、不注入、不重啟系統程序；維持未知圖示與 Draft。
