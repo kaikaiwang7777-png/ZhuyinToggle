@@ -40,7 +40,7 @@ internal sealed class Host:Form
         target.Enter+=(_,_)=>Record("按鈕取得焦點");target.Leave+=(_,_)=>Record("按鈕失去焦點");
         box.Changed+=()=>BeginInvoke(UpdateState);box.TextChanged+=(_,_)=>UpdateState();
     }
-    void UpdateState(){bool ready=box.Settled() && Profile.IsBopomofo(out _); state.AccessibleName=ready?"ZT_IME_READY":"ZT_IME_BUSY";state.Text=ready?"已觀察組字提交":"組字或狀態未知";}
+    void UpdateState(){bool ready=box.Settled() && Profile.IsBopomofo(out _); state.AccessibleName=ready?"ZT_IME_READY":"ZT_IME_BUSY";state.Text=!ready?"請用微軟注音輸入「電腦中國」並完成選字。":box.Text.EndsWith("电脑中国",StringComparison.Ordinal)?"已觀察到簡體：电脑中国":box.Text.EndsWith("電腦中國",StringComparison.Ordinal)?"已觀察到繁體：電腦中國":"請再輸入「電腦中國」並完成選字。";}
     void Record(string text) { log.AppendText($"ticks={Stopwatch.GetTimestamp()} frequency={Stopwatch.Frequency} {text}；文字長度={box.TextLength}，選取={box.SelectionStart},{box.SelectionLength}；IME開始/結束/結果={box.Starts}/{box.Ends}/{box.Results}。\r\n"); }
 }
 
