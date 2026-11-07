@@ -7,12 +7,12 @@ namespace ZhuyinToggle;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         using var mutex = new Mutex(true, @"Local\ZhuyinToggle", out bool created);
         if (!created) { MessageBox.Show("ZhuyinToggle 已在執行。", "ZhuyinToggle"); return; }
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayContext());
+        Application.Run(new TrayContext(DiagnosticLog.Create(args.Contains("--diagnostics", StringComparer.OrdinalIgnoreCase))));
     }
 }
 
@@ -36,7 +36,8 @@ internal sealed class TrayContext : ApplicationContext
     private readonly Icon unknownIcon;
     private readonly Icon traditionalIcon;
     private readonly Icon simplifiedIcon;
-    private readonly ImeModeService ime = new(new RegistryImeStore());
+    private readonly ImeModeService ime;
+    private readonly DiagnosticLog? diagnostics;
     private readonly RegistryChangeWatcher watcher;
     private readonly ToolStripItem modeItem;
     private long lastToggle;
@@ -47,36 +48,40 @@ internal sealed class TrayContext : ApplicationContext
     private static string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZhuyinToggle", "settings.json");
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
-    public TrayContext()
+    public TrayContext(DiagnosticLog? diagnostics = null)
     {
-        window = new HotkeyWindow(ToggleMode, () => ime.Refresh());
+        this.diagnostics = diagnostics;
+        ime = new ImeModeService(new RegistryImeStore(), diagnostics);
+        window = new HotkeyWindow(id => { diagnostics?.Write("wm_hotkey", new { id }); ToggleMode("hotkey", id); }, () => ime.Refresh());
         hotkeys = new HotkeyCoordinator(new WindowsHotkeyRegistration(window.Handle), SaveHotkey);
         int iconSize = Math.Clamp(SystemInformation.SmallIconSize.Width, 16, 256);
         unknownIcon = TrayIconFactory.Create(OutputState.Unknown, iconSize);
         traditionalIcon = TrayIconFactory.Create(OutputState.Traditional, iconSize);
         simplifiedIcon = TrayIconFactory.Create(OutputState.Simplified, iconSize);
         tray = new NotifyIcon { Icon = unknownIcon, Text = "ZhuyinToggle：輸出模式尚未確認", ContextMenuStrip = menu, Visible = true };
-        menu.Items.Add("切換繁簡設定", null, (_, _) => ToggleMode());
+        menu.Items.Add("切換繁簡設定", null, (_, _) => ToggleMode("menu"));
         modeItem = menu.Items.Add("設定值：未知；實際輸出：未知"); modeItem.Enabled = false;
         menu.Items.Add("快捷鍵設定", null, (_, _) => ShowSettings());
         menu.Items.Add("開機自動啟動", null, (_, _) => ToggleStartup());
         menu.Items.Add("關於", null, (_, _) => MessageBox.Show("ZhuyinToggle 開發版\n圖示顯示設定值；實際輸出需透過注音輸入驗證。", "關於"));
         menu.Items.Add("結束程式", null, (_, _) => ExitThread());
-        clickTimer.Tick += (_, _) => { clickTimer.Stop(); ToggleMode(); };
+        clickTimer.Tick += (_, _) => { clickTimer.Stop(); ToggleMode("tray"); };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); clickTimer.Start(); } };
         tray.MouseDoubleClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); ShowSettings(); } };
         ime.Changed += UpdateMode;
         ime.Refresh();
-        watcher = new RegistryChangeWatcher(window.NotifySettingChanged);
+        watcher = new RegistryChangeWatcher(window.NotifySettingChanged, diagnostics);
         Hotkey saved = Load();
         if (!hotkeys.Start(saved, out string error))
             MessageBox.Show("快捷鍵無法註冊，其他功能仍可使用。\n" + error, "ZhuyinToggle", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
-    internal void ToggleMode()
+    internal void ToggleMode(string source = "settings", int? hotkeyId = null)
     {
         long now = Environment.TickCount64;
-        if (now - lastToggle < 250) return;
+        long elapsed = now - lastToggle;
+        if (elapsed < 250) { diagnostics?.Write("toggle_ignored", new { source, hotkeyId, elapsedMs = elapsed, thresholdMs = 250 }); return; }
+        diagnostics?.Write("toggle_execute", new { source, hotkeyId, elapsedMs = elapsed });
         lastToggle = now;
         if (!ime.Toggle(out string? error)) MessageBox.Show("無法切換設定：" + error, "ZhuyinToggle", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
@@ -131,17 +136,18 @@ internal sealed class TrayContext : ApplicationContext
     private void ShowSettings() { if (form is null || form.IsDisposed) form = new SettingsForm(this); form.Show(); form.Activate(); }
     protected override void ExitThreadCore()
     {
+        diagnostics?.Write("shutdown", new { note = "若 3 秒取樣尚未完成，紀錄可能不完整" });
         watcher.Dispose(); hotkeys.Dispose();
         form?.Dispose(); clickTimer.Dispose(); tray.Visible = false; tray.Dispose(); unknownIcon.Dispose(); traditionalIcon.Dispose(); simplifiedIcon.Dispose(); menu.Dispose(); window.Dispose();
         base.ExitThreadCore();
     }
     private sealed class HotkeyWindow : NativeWindow, IDisposable
     {
-        private readonly Action pressed;
+        private readonly Action<int> pressed;
         private readonly Action settingChanged;
-        public HotkeyWindow(Action pressed, Action settingChanged) { this.pressed = pressed; this.settingChanged = settingChanged; CreateHandle(new CreateParams()); }
+        public HotkeyWindow(Action<int> pressed, Action settingChanged) { this.pressed = pressed; this.settingChanged = settingChanged; CreateHandle(new CreateParams()); }
         public void NotifySettingChanged() => Native.PostMessage(Handle, WM_IME_SETTING_CHANGED, IntPtr.Zero, IntPtr.Zero);
-        protected override void WndProc(ref Message m) { if (m.Msg == WM_HOTKEY) pressed(); else if (m.Msg == WM_IME_SETTING_CHANGED) settingChanged(); base.WndProc(ref m); }
+        protected override void WndProc(ref Message m) { if (m.Msg == WM_HOTKEY) pressed(m.WParam.ToInt32()); else if (m.Msg == WM_IME_SETTING_CHANGED) settingChanged(); base.WndProc(ref m); }
         public void Dispose() => DestroyHandle();
     }
 }

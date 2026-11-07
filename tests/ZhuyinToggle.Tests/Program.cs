@@ -6,6 +6,7 @@ static void Check(bool condition, string message)
 }
 
 Check(Hotkey.Default.IsValid, "default shortcut should be valid");
+Check(DiagnosticLog.Create(false) is null, "diagnostics must be opt-in");
 Check(Hotkey.Default.ToString() == "Win + Alt + C", "default shortcut label");
 Check(!new Hotkey(0, Keys.C).IsValid, "modifier is required");
 Check(!new Hotkey(16, Keys.C).IsValid, "unknown modifier must be rejected");

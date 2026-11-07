@@ -50,6 +50,10 @@ dotnet publish src/ZhuyinToggle/ZhuyinToggle.csproj -c Release -r win-x64 --self
 
 程式以登錄變更通知監測外部設定；監測失敗時每五秒重試。因已觀察設定與輸出不一致，圖示保留未知狀態。另有獨立 UI Automation 概念驗證，不屬於正式切換路徑，見[測試紀錄](docs/ime-validation.md)。
 
+## 選擇性診斷
+
+結束已執行的程式後，以 `ZhuyinToggle.exe --diagnostics` 啟動才會產生本機 JSONL 紀錄；不加參數則不啟用。紀錄位於 `%LOCALAPPDATA%\ZhuyinToggle\diagnostics`，包含 Windows 使用者 SID、工作階段、父程序名稱、快捷鍵 ID、登錄設定值與時間，可能包含私人資訊，**請勿上傳或提交公開倉庫**。同一台電腦上的不同程序、診斷程序及有／無訊息視窗可能影響排程，時間僅供對照。延遲取樣若看到值與預期不同，不能僅憑此判定是其他程序覆寫；必須排除下一次自己的操作，並用 ProcMon 等工具確認寫入者。
+
 ## 開源授權
 
 本專案採用 MIT License 授權，歡迎自由使用、修改與貢獻。

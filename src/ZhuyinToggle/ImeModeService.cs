@@ -41,7 +41,7 @@ internal sealed class RegistryImeStore : IImeStore
     }
 }
 
-internal sealed class ImeModeService(IImeStore store)
+internal sealed class ImeModeService(IImeStore store, DiagnosticLog? diagnostics = null)
 {
     private readonly object gate = new();
     public event Action? Changed;
@@ -59,20 +59,32 @@ internal sealed class ImeModeService(IImeStore store)
     }
     public bool Toggle(out string? error)
     {
+        int id = diagnostics?.NextSequence() ?? 0;
+        bool writeAttempted = false;
+        long writeTick = 0;
+        ImeSetting? expected = null;
         lock (gate)
         {
             try
             {
+                diagnostics?.Snapshot(id, "before");
                 var prior = store.Read();
                 if (prior == ImeSetting.Unknown) throw new InvalidOperationException("無法確認目前設定。 ");
                 var desired = prior == ImeSetting.Traditional ? ImeSetting.Simplified : ImeSetting.Traditional;
+                expected = desired;
+                diagnostics?.Write("write_attempt", new { id, prior = prior.ToString(), target = desired.ToString() });
+                writeAttempted = true;
                 store.Write(desired);
+                writeTick = System.Diagnostics.Stopwatch.GetTimestamp();
+                diagnostics?.Write("write_returned", new { id, success = true });
+                diagnostics?.Snapshot(id, "immediate", desired);
                 if (store.Read() != desired) throw new InvalidOperationException("寫入後回讀不一致。 ");
                 Current = desired; Error = null; error = null;
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.Security.SecurityException)
-            { Current = ImeSetting.Unknown; Error = ex.Message; error = ex.Message; }
+            { diagnostics?.Write("toggle_error", new { id, type = ex.GetType().Name, writeAttempted }); Current = ImeSetting.Unknown; Error = ex.Message; error = ex.Message; }
         }
+        if (writeAttempted) diagnostics?.ScheduleSnapshots(id, writeTick == 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : writeTick, expected);
         Changed?.Invoke();
         return error is null;
     }
@@ -82,8 +94,10 @@ internal sealed class RegistryChangeWatcher : IDisposable
 {
     private readonly CancellationTokenSource cancel = new();
     private readonly Task worker;
-    public RegistryChangeWatcher(Action changed)
+    private readonly DiagnosticLog? diagnostics;
+    public RegistryChangeWatcher(Action changed, DiagnosticLog? diagnostics = null)
     {
+        this.diagnostics = diagnostics;
         worker = Task.Run(() => Watch(changed));
     }
     private void Watch(Action changed)
@@ -100,11 +114,14 @@ internal sealed class RegistryChangeWatcher : IDisposable
                     int result = RegNotifyChangeKeyValue(key.Handle, false, 4, signal.SafeWaitHandle, true);
                     if (result != 0) throw new IOException($"登錄通知失敗：{result}");
                     if (WaitHandle.WaitAny([signal, cancel.Token.WaitHandle]) != 0) return;
+                    diagnostics?.Write("registry_notification", new { source = "RegNotifyChangeKeyValue", attribution = "unknown" });
+                    diagnostics?.Snapshot(0, "notification");
                     changed();
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
             {
+                diagnostics?.Write("watcher_error", new { type = ex.GetType().Name });
                 changed();
                 if (cancel.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(5))) return;
             }
