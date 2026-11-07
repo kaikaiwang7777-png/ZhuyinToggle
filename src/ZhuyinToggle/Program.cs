@@ -61,9 +61,10 @@ internal sealed class TrayContext : ApplicationContext
         tray = new NotifyIcon { Icon = unknownIcon, Text = "ZhuyinToggle：輸出模式尚未確認", ContextMenuStrip = menu, Visible = true };
         menu.Items.Add("切換繁簡設定", null, (_, _) => ToggleMode("menu"));
         modeItem = menu.Items.Add("設定值：未知；實際輸出：未知"); modeItem.Enabled = false;
+        var limitation = menu.Items.Add("輸出可能未同步；可能需正常重新取得輸入焦點"); limitation.Enabled = false;
         menu.Items.Add("快捷鍵設定", null, (_, _) => ShowSettings());
         menu.Items.Add("開機自動啟動", null, (_, _) => ToggleStartup());
-        menu.Items.Add("關於", null, (_, _) => MessageBox.Show("ZhuyinToggle 開發版\n圖示顯示設定值；實際輸出需透過注音輸入驗證。", "關於"));
+        menu.Items.Add("關於", null, (_, _) => MessageBox.Show("ZhuyinToggle 受限開發版\n僅修改設定值，灰色圖示表示實際輸出未知。輸出可能未同步，可能需要正常重新取得文字輸入焦點；請自行確認輸出。", "關於"));
         menu.Items.Add("結束程式", null, (_, _) => ExitThread());
         clickTimer.Tick += (_, _) => { clickTimer.Stop(); ToggleMode("tray"); };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); clickTimer.Start(); } };

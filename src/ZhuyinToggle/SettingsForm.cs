@@ -23,6 +23,7 @@ internal sealed class SettingsForm : Form
         Controls.Add(layout);
         layout.Controls.Add(mode);
         UpdateMode(context.ModeText, context.ModeError);
+        layout.Controls.Add(new Label { Text = "僅修改設定；實際輸出可能未同步，可能需要正常重新取得文字輸入焦點。", AutoSize = true, MaximumSize = new Size(420, 0) });
         var toggle = new Button { Text = "切換繁簡設定", AutoSize = true };
         toggle.Click += (_, _) => context.ToggleMode();
         layout.Controls.Add(toggle);
