@@ -102,3 +102,15 @@ Windows 26H2 build 26300.9818、簡體中文介面上，已在現有微軟注音
 C 組的搜尋框沒有如預期以 Escape 關閉，測試文字先輸入了搜尋框，之後以畫面所見關閉按鈕關閉；此步驟是測試操作，不是產品方案。兩詞輸出與焦點觀察為單次探索，未驗證十次往返、游標不受影響、跨版本或 Chrome。Chrome 實測目前未完成。已恢復繁體，沒有將焦點切換整合至產品。
 
 Microsoft 文件將 [ITfThreadMgr](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nn-msctf-itfthreadmgr) 定義為管理文件內容焦點的 TSF thread manager；[ITfThreadMgrEventSink](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nn-msctf-itfthreadmgreventsink) 與 [ITfThreadFocusSink](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nn-msctf-itfthreadfocussink) 分別提供 thread manager 事件與執行緒 UI 焦點通知。[ITfCompartmentMgr](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nn-msctf-itfcompartmentmgr) 的作用範圍取決於取得方式；[GetActiveProfile](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nf-msctf-itfinputprocessorprofilemgr-getactiveprofile) 可查作用中設定檔，但這些文件都沒有證明從本程序可要求另一程序重新讀取這個微軟注音繁簡設定。沒有確認公開支援且不搶焦點的更新方法，不猜測性廣播、不注入、不重啟系統程序；維持未知圖示與 Draft。
+
+## 簡化宿主：自動辨識與焦點對照先導實測
+
+本次以獨立 WinForms 宿主、同一 Windows 互動桌面、同一輸入框為對象；以實際注音鍵位事件與 Enter 提交「電腦中國／电脑中国」，沒有貼上或注入完成的中文字。宿主自身 `GetActiveProfile` 回報 Microsoft Bopomofo 的 zh-TW 語言、CLSID 與 profile GUID（對照 [Microsoft 預設輸入設定檔](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/default-input-locales-for-windows-language-packs)），各樣本觀察到兩次 IME 組字開始／結束／結果事件。IMM 和視窗事件不能證明所有私有 TSF 狀態，判斷只限本宿主及本機。
+
+- A 先導：繁體基準為「電腦中國」；寫入簡體後不改焦點，實際仍為「電腦中國」，繁→簡 FAIL。回寫繁體仍輸出「電腦中國」，但前次未真正進入簡體，因此簡→繁是 NOT TESTED，不能當作有效回程。之後另一次重複 A 得到相同現象。
+- B 先導：基準「電腦中國」，焦點 A Leave → Button Enter → Button Leave → A Enter；輸出「电脑中国」。回寫繁體並相同焦點往返，輸出「電腦中國」；兩端各一次 PASS，完整往返 1/1，樣本僅一次。
+- C 先導：基準「電腦中國」，焦點 A Leave → B Enter → B Leave → A Enter；輸出「电脑中国」。回寫繁體並相同焦點往返，輸出「電腦中國」；兩端各一次 PASS，完整往返 1/1，樣本僅一次。
+
+B／C 每次返回 A 時，原游標／選取 `(4,0)` 曾變為全選 `(0,4)`；實驗版在自身欄位、沒有新的輸入且文字不變時，主動還原為 `(4,0)`，之後比較文字與選取相符。這是實際副作用，不可宣稱焦點往返全程不干擾。閃爍與組字中斷沒有獨立自動化驗證。設定最終回讀為測試前原始繁體值；未以登錄回讀代替輸出驗證。
+
+各組五次往返尚未完成。先導樣本支持「在此 WinForms 宿主中焦點往返可能使設定被採用」的假說，但不能證明是唯一因素或正式可靠機制。B／C 的第二階段、不同應用、用戶操作競態及跨版本均未驗證。未將跨程序焦點操作或此實驗整合正式產品。
