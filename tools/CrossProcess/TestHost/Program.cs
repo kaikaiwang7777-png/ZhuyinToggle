@@ -4,7 +4,7 @@ internal static class Program { [STAThread] static void Main() { ApplicationConf
 internal sealed class TestText : TextBox
 {
     public bool Composing, Candidate; public int Starts, Ends, Results;
-    public Action? Changed;
+    public Action<string>? Changed;
     protected override void WndProc(ref Message m)
     {
         if(m.Msg==0x0302) return;
@@ -12,7 +12,7 @@ internal sealed class TestText : TextBox
         if(m.Msg==0x010F && (m.LParam.ToInt64()&0x800)!=0) Results++;
         if(m.Msg==0x0282 && m.WParam.ToInt64()==5) Candidate=true;
         if(m.Msg==0x0282 && m.WParam.ToInt64()==4) Candidate=false;
-        base.WndProc(ref m); if(m.Msg is 0x010D or 0x010E or 0x010F or 0x0282) Changed?.Invoke();
+        base.WndProc(ref m); string? tag=m.Msg==0x010D?"IME_START":m.Msg==0x010E?"IME_END":m.Msg==0x010F && (m.LParam.ToInt64()&0x800)!=0?"IME_RESULT":null; if(tag is not null) Changed?.Invoke(tag);
     }
     public bool Settled()
     {
@@ -38,10 +38,10 @@ internal sealed class Host:Form
         panel.Controls.Add(new Label{Text="專用可丟棄文字；請勿輸入私人資料。",AutoSize=true}); panel.Controls.Add(box);panel.Controls.Add(target);panel.Controls.Add(state);panel.Controls.Add(log);Controls.Add(panel);
         box.Enter+=(_,_)=>Record("輸入框取得焦點");box.Leave+=(_,_)=>Record("輸入框失去焦點");
         target.Enter+=(_,_)=>Record("按鈕取得焦點");target.Leave+=(_,_)=>Record("按鈕失去焦點");
-        box.Changed+=()=>BeginInvoke(UpdateState);box.TextChanged+=(_,_)=>UpdateState();
+        box.Changed+=tag=>{Record(tag);BeginInvoke(UpdateState);};box.TextChanged+=(_,_)=>{UpdateState();Record("文字變更");};
     }
     void UpdateState(){bool ready=box.Settled() && Profile.IsBopomofo(out _); state.AccessibleName=ready?"ZT_IME_READY":"ZT_IME_BUSY";state.Text=!ready?"請用微軟注音輸入「電腦中國」並完成選字。":box.Text.EndsWith("电脑中国",StringComparison.Ordinal)?"已觀察到簡體：电脑中国":box.Text.EndsWith("電腦中國",StringComparison.Ordinal)?"已觀察到繁體：電腦中國":"請再輸入「電腦中國」並完成選字。";}
-    void Record(string text) { log.AppendText($"ticks={Stopwatch.GetTimestamp()} frequency={Stopwatch.Frequency} {text}；文字長度={box.TextLength}，選取={box.SelectionStart},{box.SelectionLength}；IME開始/結束/結果={box.Starts}/{box.Ends}/{box.Results}。\r\n"); }
+    void Record(string text) { log.AppendText($"ticks={Stopwatch.GetTimestamp()} frequency={Stopwatch.Frequency} {text}；文字長度={box.TextLength}，選取={box.SelectionStart},{box.SelectionLength}；IME開始/結束/結果={box.Starts}/{box.Ends}/{box.Results}；辨識={(box.Text.EndsWith("电脑中国",StringComparison.Ordinal)?"电脑中国":box.Text.EndsWith("電腦中國",StringComparison.Ordinal)?"電腦中國":"未完成")}。\r\n"); }
 }
 
 internal static class Profile

@@ -5,11 +5,11 @@ using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using Microsoft.Win32;
 
-internal static class Program { [STAThread] static void Main(string[] args) { if(args.Length!=1 || args[0] is not ("--focus" or "--write-only")) return; ApplicationConfiguration.Initialize(); Application.Run(new Controller(args[0]=="--focus",Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"TestHost.exe")))); } }
+internal static class Program { [STAThread] static void Main(string[] args) { if(args.Length!=1 || args[0] is not ("--focus" or "--write-only" or "--observe")) return; ApplicationConfiguration.Initialize(); Application.Run(new Controller(args[0]=="--focus",args[0]=="--observe",Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"TestHost.exe")))); } }
 internal sealed class Controller:Form
 {
     const string PathKey=@"SOFTWARE\Microsoft\IME\15.0\IMETC", ValueName="Enable Simplified Chinese Output", T="0x00000000", S="0x00000001";
-    readonly bool focusMode; readonly string hostPath; readonly Label label=new(){Dock=DockStyle.Fill,Text="背景控制器：在測試宿主按 Win+Alt+C。結束請關閉本視窗。",AutoSize=false};
+    readonly bool focusMode, observe; readonly string hostPath; readonly System.Windows.Forms.Timer observeTimer=new(){Interval=250}; string lastObservation=""; readonly Label label=new(){Dock=DockStyle.Fill,Text="背景控制器：在測試宿主按 Win+Alt+C。結束請關閉本視窗。",AutoSize=false};
     readonly System.Windows.Forms.Timer timer=new(){Interval=1500};
     string? original, expected; bool registered, blocked, running;
     readonly CancellationTokenSource closing=new(); readonly object eventLock=new(); TaskCompletionSource<bool>? returnEvent; AutomationElement? returnTarget;
@@ -19,7 +19,7 @@ internal sealed class Controller:Form
     void Trace(string message) { lock(logLock) { try { Directory.CreateDirectory(Path.GetDirectoryName(diagnostic)!); File.AppendAllText(diagnostic,$"ticks={Stopwatch.GetTimestamp()} frequency={Stopwatch.Frequency} {message}\r\n"); } catch(IOException) { } } }
     static string Describe(AutomationElement? e) { if(e is null)return "<null>"; try { var c=e.Current; return $"Name={c.Name}; AutomationId={c.AutomationId}; ProcessId={c.ProcessId}; NativeWindowHandle={c.NativeWindowHandle}"; } catch(ElementNotAvailableException) {return "<unavailable>";} }
     bool Inspect(string stage, IntPtr fg, uint last, AutomationElement target, bool allowFocusPending=false) {
-        IntPtr nowFg=GetForegroundWindow(); uint nowLast=LastInput(); var actual=AutomationElement.FocusedElement;
+        IntPtr nowFg=GetForegroundWindow(); uint nowLast=LastInput(); var actual=AutomationElement.FocusedElement; TraceHierarchy(stage,fg,target);
         bool foreground=nowFg==fg, idle=nowLast==last, same=actual is not null && Automation.Compare(actual,target);
         Trace($"{stage} foreground={(foreground?"PASS":"FAIL")} expected={fg} actual={nowFg}");
         Trace($"{stage} lastInput={(idle?"PASS":"FAIL")} before={last} after={nowLast} delta={unchecked(nowLast-last)} ms");
@@ -28,13 +28,14 @@ internal sealed class Controller:Form
         return same;
     }
     void Check(string stage, IntPtr fg, uint last, AutomationElement target)=>Inspect(stage,fg,last,target);
-    public Controller(bool focusMode,string hostPath)
+    public Controller(bool focusMode,bool observe,string hostPath)
     {
-        this.focusMode=focusMode;this.hostPath=hostPath;Text="跨程序測試控制器（僅測試宿主）";Width=620;Height=180;Controls.Add(label);
-        Shown+=(_,_)=> {try{using var k=Open(false); original=expected=Read(k); var dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZhuyinToggle","CrossProcessBackup");Directory.CreateDirectory(dir);File.WriteAllText(Path.Combine(dir,$"{Guid.NewGuid():N}.txt"),$"原始 REG_SZ={original}\r\n");registered=RegisterHotKey(Handle,1,0x4009,0x43);Log(registered?"已註冊熱鍵；先聚焦測試宿主並完成注音組字。":"註冊失敗，停止。");}catch(Exception ex){blocked=true;Log("初始化失敗："+ex.Message);}};
+        this.focusMode=focusMode;this.observe=observe;this.hostPath=hostPath;Text="跨程序測試控制器（僅測試宿主）";Width=620;Height=180;Controls.Add(label);
+        Shown+=(_,_)=> {if(observe){observeTimer.Start();Log("唯讀觀察模式，不修改設定、不控制焦點。");return;}try{using var k=Open(false); original=expected=Read(k); var dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZhuyinToggle","CrossProcessBackup");Directory.CreateDirectory(dir);File.WriteAllText(Path.Combine(dir,$"{Guid.NewGuid():N}.txt"),$"原始 REG_SZ={original}\r\n");registered=RegisterHotKey(Handle,1,0x4009,0x43);Log(registered?"已註冊熱鍵；先聚焦測試宿主並完成注音組字。":"註冊失敗，停止。");}catch(Exception ex){blocked=true;Log("初始化失敗："+ex.Message);}};
+        observeTimer.Tick+=(_,_)=>Observe();
         focusHandler=(sender,e)=> { try { if(sender is AutomationElement element && watchedPid!=0 && element.Current.ProcessId==watchedPid) { Trace($"UIA FocusChanged [{Describe(element)}]"); lock(eventLock) { if(returnTarget is not null && Automation.Compare(element,returnTarget)) returnEvent?.TrySetResult(true); } } } catch(ElementNotAvailableException) { Trace("UIA FocusChanged: element unavailable"); } };
         try { Automation.AddAutomationFocusChangedEventHandler(focusHandler); Trace("UIA focus handler registered"); } catch(Exception ex) { Trace("UIA handler registration failed: "+ex.GetType().Name); }
-        timer.Tick+=(_,_)=> {timer.Stop(); Execute();}; FormClosing+=(_,e)=> {timer.Stop(); closing.Cancel(); if(!Restore()) { e.Cancel=true;MessageBox.Show("設定已被外部變更或無法還原；未覆寫，請檢查原值。", "需要人工處理");return;} if(registered)UnregisterHotKey(Handle,1); if(focusHandler is not null)Automation.RemoveAutomationFocusChangedEventHandler(focusHandler);};
+        timer.Tick+=(_,_)=> {timer.Stop(); Execute();}; FormClosing+=(_,e)=> {timer.Stop(); observeTimer.Stop(); closing.Cancel(); if(!Restore()) { e.Cancel=true;MessageBox.Show("設定已被外部變更或無法還原；未覆寫，請檢查原值。", "需要人工處理");return;} if(registered)UnregisterHotKey(Handle,1); if(focusHandler is not null)Automation.RemoveAutomationFocusChangedEventHandler(focusHandler);};
     }
     void Log(string s){Trace(s);label.Text=s;}
     protected override void WndProc(ref Message m){if(m.Msg==0x0312 && m.WParam.ToInt32()==1 && !blocked && !running && registered){timer.Stop();timer.Start();Log("已接收；等待使用者停止輸入後檢查。 ");}base.WndProc(ref m);}
@@ -61,7 +62,7 @@ internal sealed class Controller:Form
             var input=Unique(root,"ZT_TEST_INPUT",ControlType.Edit); var button=Unique(root,"ZT_TEST_TARGET",ControlType.Button);
             var proof=root.FindAll(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,"ZT_IME_READY"));if(proof.Count!=1)throw new InvalidOperationException("測試宿主沒有已提交組字證據");
             if(AutomationElement.FocusedElement is not AutomationElement current||!Automation.Compare(current,input))throw new InvalidOperationException("原焦點不是指定測試欄");
-            var before=Snapshot(input);if(GetForegroundWindow()!=fg||LastInput()!=last)throw new InvalidOperationException("使用者已操作或前景變動");
+            TraceHierarchy("before",fg,input); var before=Snapshot(input);if(GetForegroundWindow()!=fg||LastInput()!=last)throw new InvalidOperationException("使用者已操作或前景變動");
             using var k=Open(true);var prior=Read(k);if(prior!=expected)throw new InvalidOperationException("設定遭外部修改");
             var next=prior==T?S:T;Trace($"registry before={prior}, kind=REG_SZ, target={next}");k.SetValue(ValueName,next,RegistryValueKind.String);expected=next;var readback=Read(k);Trace($"registry readback={readback}, match={readback==next}");if(readback!=next)throw new InvalidOperationException("回讀不符");
             if(GetForegroundWindow()!=fg||LastInput()!=last || !Automation.Compare(AutomationElement.FocusedElement,input))throw new InvalidOperationException("寫入後焦點或輸入發生變化");
@@ -98,7 +99,22 @@ internal sealed class Controller:Form
         catch(Exception ex) when(ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.Security.SecurityException or ElementNotAvailableException or System.ComponentModel.Win32Exception or NotSupportedException or OperationCanceledException or ArgumentException){blocked=true;Log("停止："+ex.Message);}
         finally { running=false; }
     }
-    bool Restore(){if(original is null||expected is null)return true;try{using var k=Open(true);if(Read(k)!=expected){Log("外部改動，未還原。");return false;}if(expected!=original)k.SetValue(ValueName,original,RegistryValueKind.String);return Read(k)==original;}catch(Exception ex){Log("無法還原："+ex.Message);return false;}}
+    bool Restore(){if(observe)return true;if(original is null||expected is null)return true;try{using var k=Open(true);if(Read(k)!=expected){Log("外部改動，未還原。");return false;}if(expected!=original)k.SetValue(ValueName,original,RegistryValueKind.String);return Read(k)==original;}catch(Exception ex){Log("無法還原："+ex.Message);return false;}}
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int left,top,right,bottom; }
+    [StructLayout(LayoutKind.Sequential)] struct GUI { public uint size,flags; public IntPtr active,focus,capture,menuOwner,moveSize,caret; public RECT caretRect; }
+    string Hierarchy(IntPtr host, AutomationElement? target) {
+        IntPtr fg=GetForegroundWindow(); uint fgPid,hostPid; uint tid=GetWindowThreadProcessId(host,out hostPid); GetWindowThreadProcessId(fg,out fgPid);
+        var info=new GUI{size=(uint)Marshal.SizeOf<GUI>()}; bool ok=GetGUIThreadInfo(tid,ref info); var actual=AutomationElement.FocusedElement;
+        IntPtr input=target is null?IntPtr.Zero:new IntPtr(target.Current.NativeWindowHandle);
+        string focused=actual is null?"<null>":actual.Current.ProcessId==(int)hostPid?Describe(actual):$"external processId={actual.Current.ProcessId} handle={actual.Current.NativeWindowHandle} (redacted)";
+        return $"host={host} hostRoot={GetAncestor(host,2)} hostPid={hostPid} tid={tid}; foreground={fg} foregroundRoot={GetAncestor(fg,2)} foregroundPid={fgPid}; guiOk={ok} active={info.active} activeRoot={GetAncestor(info.active,2)} focus={info.focus} focusRoot={GetAncestor(info.focus,2)}; target={input} targetRoot={GetAncestor(input,2)} targetIsChild={IsChild(host,input)}; UIA=[{focused}]";
+    }
+    void TraceHierarchy(string stage,IntPtr host,AutomationElement? target){Trace($"hierarchy {stage}: {Hierarchy(host,target)}");}
+    void Observe(){try { using var proc=System.Diagnostics.Process.GetProcessesByName("TestHost").SingleOrDefault(x=>string.Equals(Path.GetFullPath(x.MainModule!.FileName),hostPath,StringComparison.OrdinalIgnoreCase)); if(proc is null||proc.MainWindowHandle==IntPtr.Zero)return; var root=AutomationElement.FromHandle(proc.MainWindowHandle); var input=Unique(root,"ZT_TEST_INPUT",ControlType.Edit); var result=Hierarchy(proc.MainWindowHandle,input); if(result!=lastObservation){lastObservation=result;Trace("observe "+result);} } catch(Exception ex) when(ex is InvalidOperationException or ElementNotAvailableException or System.ComponentModel.Win32Exception or ArgumentException) {Trace("observe error "+ex.GetType().Name);} }
+    [DllImport("user32.dll")]static extern IntPtr GetAncestor(IntPtr h,uint flags);
+    [DllImport("user32.dll")]static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
+    [DllImport("user32.dll")]static extern bool GetGUIThreadInfo(uint tid,ref GUI info);
+    [DllImport("user32.dll")]static extern bool IsChild(IntPtr parent,IntPtr child);
     [StructLayout(LayoutKind.Sequential)]struct LAST {public uint size,tick;}
     static uint LastInput(){var x=new LAST{size=(uint)Marshal.SizeOf<LAST>()};if(!GetLastInputInfo(ref x))throw new InvalidOperationException("無法檢查輸入活動");return x.tick;}
     [DllImport("user32.dll")]static extern bool GetLastInputInfo(ref LAST x);
