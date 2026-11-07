@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 internal static class Program { [STAThread] static void Main() { ApplicationConfiguration.Initialize(); Application.Run(new Host()); } }
 internal sealed class TestText : TextBox
 {
@@ -40,7 +41,7 @@ internal sealed class Host:Form
         box.Changed+=()=>BeginInvoke(UpdateState);box.TextChanged+=(_,_)=>UpdateState();
     }
     void UpdateState(){bool ready=box.Settled() && Profile.IsBopomofo(out _); state.AccessibleName=ready?"ZT_IME_READY":"ZT_IME_BUSY";state.Text=ready?"已觀察組字提交":"組字或狀態未知";}
-    void Record(string text) { log.AppendText($"{DateTime.Now:HH:mm:ss.fff} {text}；文字長度={box.TextLength}，選取={box.SelectionStart},{box.SelectionLength}；IME開始/結束/結果={box.Starts}/{box.Ends}/{box.Results}。\r\n"); }
+    void Record(string text) { log.AppendText($"ticks={Stopwatch.GetTimestamp()} frequency={Stopwatch.Frequency} {text}；文字長度={box.TextLength}，選取={box.SelectionStart},{box.SelectionLength}；IME開始/結束/結果={box.Starts}/{box.Ends}/{box.Results}。\r\n"); }
 }
 
 internal static class Profile

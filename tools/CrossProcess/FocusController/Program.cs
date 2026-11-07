@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Windows.Automation.Text;
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
@@ -11,13 +12,28 @@ internal sealed class Controller:Form
     readonly bool focusMode; readonly string hostPath; readonly Label label=new(){Dock=DockStyle.Fill,Text="背景控制器：在測試宿主按 Win+Alt+C。結束請關閉本視窗。",AutoSize=false};
     readonly System.Windows.Forms.Timer timer=new(){Interval=1500};
     string? original, expected; bool registered, blocked;
+    readonly object logLock=new();
+    readonly string diagnostic=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZhuyinToggle","CrossProcessBackup","focus-diagnostic.log");
+    AutomationFocusChangedEventHandler? focusHandler; volatile int watchedPid;
+    void Trace(string message) { lock(logLock) { try { Directory.CreateDirectory(Path.GetDirectoryName(diagnostic)!); File.AppendAllText(diagnostic,$"ticks={Stopwatch.GetTimestamp()} frequency={Stopwatch.Frequency} {message}\r\n"); } catch(IOException) { } } }
+    static string Describe(AutomationElement? e) { if(e is null)return "<null>"; try { var c=e.Current; return $"Name={c.Name}; AutomationId={c.AutomationId}; ProcessId={c.ProcessId}; NativeWindowHandle={c.NativeWindowHandle}"; } catch(ElementNotAvailableException) {return "<unavailable>";} }
+    void Check(string stage, IntPtr fg, uint last, AutomationElement target) {
+        IntPtr nowFg=GetForegroundWindow(); uint nowLast=LastInput(); var actual=AutomationElement.FocusedElement;
+        bool foreground=nowFg==fg, idle=nowLast==last, same=actual is not null && Automation.Compare(actual,target);
+        Trace($"{stage} foreground={(foreground?"PASS":"FAIL")} expected={fg} actual={nowFg}");
+        Trace($"{stage} lastInput={(idle?"PASS":"FAIL")} before={last} after={nowLast} delta={unchecked(nowLast-last)} ms");
+        Trace($"{stage} focus={(same?"PASS":"FAIL")} actual=[{Describe(actual)}] expected=[{Describe(target)}]");
+        if(!foreground || !idle || !same) throw new InvalidOperationException($"{stage}: 前景={(foreground?"PASS":"FAIL")} 輸入={(idle?"PASS":"FAIL")} 焦點={(same?"PASS":"FAIL")}；停止不搶回");
+    }
     public Controller(bool focusMode,string hostPath)
     {
         this.focusMode=focusMode;this.hostPath=hostPath;Text="跨程序測試控制器（僅測試宿主）";Width=620;Height=180;Controls.Add(label);
         Shown+=(_,_)=> {try{using var k=Open(false); original=expected=Read(k); var dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZhuyinToggle","CrossProcessBackup");Directory.CreateDirectory(dir);File.WriteAllText(Path.Combine(dir,$"{Guid.NewGuid():N}.txt"),$"原始 REG_SZ={original}\r\n");registered=RegisterHotKey(Handle,1,0x4009,0x43);Log(registered?"已註冊熱鍵；先聚焦測試宿主並完成注音組字。":"註冊失敗，停止。");}catch(Exception ex){blocked=true;Log("初始化失敗："+ex.Message);}};
-        timer.Tick+=(_,_)=> {timer.Stop(); Execute();}; FormClosing+=(_,e)=> {timer.Stop(); if(!Restore()) { e.Cancel=true;MessageBox.Show("設定已被外部變更或無法還原；未覆寫，請檢查原值。", "需要人工處理");return;} if(registered)UnregisterHotKey(Handle,1);};
+        focusHandler=(sender,e)=> { try { if(sender is AutomationElement element && watchedPid!=0 && element.Current.ProcessId==watchedPid) Trace($"UIA FocusChanged [{Describe(element)}]"); } catch(ElementNotAvailableException) { Trace("UIA FocusChanged: element unavailable"); } };
+        try { Automation.AddAutomationFocusChangedEventHandler(focusHandler); Trace("UIA focus handler registered"); } catch(Exception ex) { Trace("UIA handler registration failed: "+ex.GetType().Name); }
+        timer.Tick+=(_,_)=> {timer.Stop(); Execute();}; FormClosing+=(_,e)=> {timer.Stop(); if(!Restore()) { e.Cancel=true;MessageBox.Show("設定已被外部變更或無法還原；未覆寫，請檢查原值。", "需要人工處理");return;} if(registered)UnregisterHotKey(Handle,1); if(focusHandler is not null)Automation.RemoveAutomationFocusChangedEventHandler(focusHandler);};
     }
-    void Log(string s){label.Text=s;}
+    void Log(string s){Trace(s);label.Text=s;}
     protected override void WndProc(ref Message m){if(m.Msg==0x0312 && m.WParam.ToInt32()==1 && !blocked && registered){timer.Stop();timer.Start();Log("已接收；等待使用者停止輸入後檢查。 ");}base.WndProc(ref m);}
     static RegistryKey Open(bool write)=>Registry.CurrentUser.OpenSubKey(PathKey,write)??throw new InvalidOperationException("設定不存在");
     static string Read(RegistryKey k){if(!k.GetValueNames().Contains(ValueName)||k.GetValueKind(ValueName)!=RegistryValueKind.String)throw new InvalidOperationException("設定不是 REG_SZ");var s=k.GetValue(ValueName) as string;return s is T or S?s:throw new InvalidOperationException("資料不正確");}
@@ -37,23 +53,23 @@ internal sealed class Controller:Form
             uint last=LastInput(); if(unchecked((uint)Environment.TickCount-last)<1000)throw new InvalidOperationException("仍有使用者輸入，未操作");
             IntPtr fg=GetForegroundWindow();if(fg==IntPtr.Zero)throw new InvalidOperationException("無前景視窗");
             var root=AutomationElement.FromHandle(fg); if(root is null||root.Current.Name!="ZhuyinToggle Cross-Process TestHost")throw new InvalidOperationException("前景不是專用測試宿主");
-            using var process=System.Diagnostics.Process.GetProcessById(root.Current.ProcessId);if(!string.Equals(Path.GetFullPath(process.MainModule!.FileName),hostPath,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("程序路徑不符");
+            watchedPid=root.Current.ProcessId; using var process=System.Diagnostics.Process.GetProcessById(root.Current.ProcessId);if(!string.Equals(Path.GetFullPath(process.MainModule!.FileName),hostPath,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("程序路徑不符");
             var input=Unique(root,"ZT_TEST_INPUT",ControlType.Edit); var button=Unique(root,"ZT_TEST_TARGET",ControlType.Button);
             var proof=root.FindAll(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,"ZT_IME_READY"));if(proof.Count!=1)throw new InvalidOperationException("測試宿主沒有已提交組字證據");
             if(AutomationElement.FocusedElement is not AutomationElement current||!Automation.Compare(current,input))throw new InvalidOperationException("原焦點不是指定測試欄");
             var before=Snapshot(input);if(GetForegroundWindow()!=fg||LastInput()!=last)throw new InvalidOperationException("使用者已操作或前景變動");
             using var k=Open(true);var prior=Read(k);if(prior!=expected)throw new InvalidOperationException("設定遭外部修改");
-            var next=prior==T?S:T;k.SetValue(ValueName,next,RegistryValueKind.String);expected=next;if(Read(k)!=next)throw new InvalidOperationException("回讀不符");
+            var next=prior==T?S:T;Trace($"registry before={prior}, kind=REG_SZ, target={next}");k.SetValue(ValueName,next,RegistryValueKind.String);expected=next;var readback=Read(k);Trace($"registry readback={readback}, match={readback==next}");if(readback!=next)throw new InvalidOperationException("回讀不符");
             if(GetForegroundWindow()!=fg||LastInput()!=last || !Automation.Compare(AutomationElement.FocusedElement,input))throw new InvalidOperationException("寫入後焦點或輸入發生變化");
             if(!focusMode){Log($"唯寫入 {prior} → {next} 已回讀；請在宿主以注音輸入測試詞。");return;}
-            button.SetFocus();
-            if(GetForegroundWindow()!=fg||LastInput()!=last||!Automation.Compare(AutomationElement.FocusedElement,button))throw new InvalidOperationException("無法確認目標焦點，停止不搶回");
+            Trace("button.SetFocus begin"); button.SetFocus(); Trace("button.SetFocus returned");
+            Check("synchronous-after-button",fg,last,button);
             // 焦點操作後放回訊息循環，並核對使用者與焦點未變。
             BeginInvoke(()=> { try {
-                if(GetForegroundWindow()!=fg||LastInput()!=last||!Automation.Compare(AutomationElement.FocusedElement,button))throw new InvalidOperationException("焦點或使用者輸入已變，不搶回");
+                Check("begininvoke-before-return",fg,last,button);
                 input.SetFocus();
                 if(GetForegroundWindow()!=fg||!Automation.Compare(AutomationElement.FocusedElement,input))throw new InvalidOperationException("未能恢復焦點");
-                var after=Snapshot(input); bool textSame=before.value==after.value, selectSame=before.start==after.start&&before.length==after.length;
+                var after=Snapshot(input); Trace($"returned selection before={before.start},{before.length} after={after.start},{after.length}; textEqual={before.value==after.value}"); bool textSame=before.value==after.value, selectSame=before.start==after.start&&before.length==after.length;
                 if(!textSame||!selectSame)throw new InvalidOperationException($"焦點已返回，但文字不變={textSame}、選取不變={selectSame}；停止，不修正。");
                 Log($"焦點往返完成，文字及選取不變；{prior} → {next} 已回讀。請以注音輸入測試詞。");
             } catch(Exception ex){blocked=true;Log("停止："+ex.Message);} });
