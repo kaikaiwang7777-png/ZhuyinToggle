@@ -50,6 +50,19 @@ using (var manager = new HotkeyCoordinator(registrations, _ => { if (failSave) t
     Check(manager.Active == next && registrations.Keys.Count == 1 && registrations.Keys.Values.Single() == next, "new shortcut replaces old only after save");
 }
 Check(registrations.Keys.Count == 0, "dispose must release registration");
+var store = new FakeImeStore();
+var ime = new ImeModeService(store);
+int changes = 0;
+ime.Changed += () => changes++;
+ime.Refresh();
+Check(ime.Current == ImeSetting.Traditional, "initial IME setting");
+Check(ime.Toggle(out _) && ime.Current == ImeSetting.Simplified, "toggle to simplified");
+Check(ime.Toggle(out _) && ime.Current == ImeSetting.Traditional, "toggle back");
+store.FailWrite = true;
+Check(!ime.Toggle(out _) && ime.Current == ImeSetting.Unknown, "write failure is unknown");
+store.FailWrite = false; store.IgnoreWrite = true;
+Check(!ime.Toggle(out _) && ime.Current == ImeSetting.Unknown, "mismatched readback is unknown");
+Check(changes == 5, "notifications for refresh and toggles");
 Console.WriteLine("快捷鍵規則與交易式替換測試通過；尚未測試 Windows 快捷鍵註冊。");
 
 sealed class FakeRegistration : IHotkeyRegistration
@@ -62,4 +75,17 @@ sealed class FakeRegistration : IHotkeyRegistration
         Keys.Add(id, key); error = ""; return true;
     }
     public void Unregister(int id) => Keys.Remove(id);
+}
+
+sealed class FakeImeStore : IImeStore
+{
+    public ImeSetting Value = ImeSetting.Traditional;
+    public bool FailWrite;
+    public bool IgnoreWrite;
+    public ImeSetting Read() => Value;
+    public void Write(ImeSetting value)
+    {
+        if (FailWrite) throw new IOException("test failure");
+        if (!IgnoreWrite) Value = value;
+    }
 }

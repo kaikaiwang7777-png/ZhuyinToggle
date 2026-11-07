@@ -30,9 +30,16 @@ internal sealed record Hotkey(uint Modifiers, Keys Key)
 internal sealed class TrayContext : ApplicationContext
 {
     private const int WM_HOTKEY = 0x0312;
+    private const int WM_IME_SETTING_CHANGED = 0x8001;
     private readonly HotkeyWindow window;
     private readonly NotifyIcon tray;
     private readonly Icon unknownIcon;
+    private readonly Icon traditionalIcon;
+    private readonly Icon simplifiedIcon;
+    private readonly ImeModeService ime = new(new RegistryImeStore());
+    private readonly RegistryChangeWatcher watcher;
+    private readonly ToolStripItem modeItem;
+    private long lastToggle;
     private readonly ContextMenuStrip menu = new();
     private readonly System.Windows.Forms.Timer clickTimer = new() { Interval = SystemInformation.DoubleClickTime };
     private readonly HotkeyCoordinator hotkeys;
@@ -42,25 +49,47 @@ internal sealed class TrayContext : ApplicationContext
 
     public TrayContext()
     {
-        window = new HotkeyWindow(() => MessageBox.Show("切換功能尚未驗證，暫不可用。", "ZhuyinToggle"));
+        window = new HotkeyWindow(ToggleMode, () => ime.Refresh());
         hotkeys = new HotkeyCoordinator(new WindowsHotkeyRegistration(window.Handle), SaveHotkey);
-        unknownIcon = TrayIconFactory.Create(OutputState.Unknown, Math.Max(16, SystemInformation.SmallIconSize.Width));
+        int iconSize = Math.Clamp(SystemInformation.SmallIconSize.Width, 16, 256);
+        unknownIcon = TrayIconFactory.Create(OutputState.Unknown, iconSize);
+        traditionalIcon = TrayIconFactory.Create(OutputState.Traditional, iconSize);
+        simplifiedIcon = TrayIconFactory.Create(OutputState.Simplified, iconSize);
         tray = new NotifyIcon { Icon = unknownIcon, Text = "ZhuyinToggle：輸出模式尚未確認", ContextMenuStrip = menu, Visible = true };
-        menu.Items.Add("切換繁簡（尚未驗證）", null, (_, _) => Explain());
-        menu.Items.Add("目前模式：無法確認").Enabled = false;
+        menu.Items.Add("切換繁簡設定", null, (_, _) => ToggleMode());
+        modeItem = menu.Items.Add("設定值：未知；實際輸出：未知"); modeItem.Enabled = false;
         menu.Items.Add("快捷鍵設定", null, (_, _) => ShowSettings());
         menu.Items.Add("開機自動啟動", null, (_, _) => ToggleStartup());
-        menu.Items.Add("關於", null, (_, _) => MessageBox.Show("ZhuyinToggle 開發版\n注音輸出切換尚未驗證，不能作為正式版本使用。", "關於"));
+        menu.Items.Add("關於", null, (_, _) => MessageBox.Show("ZhuyinToggle 開發版\n圖示顯示設定值；實際輸出需透過注音輸入驗證。", "關於"));
         menu.Items.Add("結束程式", null, (_, _) => ExitThread());
-        clickTimer.Tick += (_, _) => { clickTimer.Stop(); Explain(); };
+        clickTimer.Tick += (_, _) => { clickTimer.Stop(); ToggleMode(); };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); clickTimer.Start(); } };
         tray.MouseDoubleClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); ShowSettings(); } };
+        ime.Changed += UpdateMode;
+        ime.Refresh();
+        watcher = new RegistryChangeWatcher(window.NotifySettingChanged);
         Hotkey saved = Load();
         if (!hotkeys.Start(saved, out string error))
             MessageBox.Show("快捷鍵無法註冊，其他功能仍可使用。\n" + error, "ZhuyinToggle", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
-    private static void Explain() => MessageBox.Show("目前無法可靠確認或切換微軟注音的實際輸出模式。", "尚未驗證");
+    internal void ToggleMode()
+    {
+        long now = Environment.TickCount64;
+        if (now - lastToggle < 250) return;
+        lastToggle = now;
+        if (!ime.Toggle(out string? error)) MessageBox.Show("無法切換設定：" + error, "ZhuyinToggle", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+    private void UpdateMode()
+    {
+        string setting = ime.Current switch { ImeSetting.Traditional => "繁體", ImeSetting.Simplified => "簡體", _ => "未知" };
+        tray.Icon = ime.Current switch { ImeSetting.Traditional => traditionalIcon, ImeSetting.Simplified => simplifiedIcon, _ => unknownIcon };
+        tray.Text = $"ZhuyinToggle：設定值 {setting}；實際輸出未知";
+        modeItem.Text = $"設定值：{setting}；實際輸出：未知";
+        form?.UpdateMode(setting, ime.Error);
+    }
+    internal string ModeText => ime.Current switch { ImeSetting.Traditional => "繁體", ImeSetting.Simplified => "簡體", _ => "未知" };
+    internal string? ModeError => ime.Error;
     private static Hotkey Load()
     {
         try { var key = JsonSerializer.Deserialize<Hotkey>(File.ReadAllText(SettingsPath)); return key is { IsValid: true } ? key : Hotkey.Default; }
@@ -101,15 +130,17 @@ internal sealed class TrayContext : ApplicationContext
     private void ShowSettings() { if (form is null || form.IsDisposed) form = new SettingsForm(this); form.Show(); form.Activate(); }
     protected override void ExitThreadCore()
     {
-        hotkeys.Dispose();
-        form?.Dispose(); clickTimer.Dispose(); tray.Visible = false; tray.Dispose(); unknownIcon.Dispose(); menu.Dispose(); window.Dispose();
+        watcher.Dispose(); hotkeys.Dispose();
+        form?.Dispose(); clickTimer.Dispose(); tray.Visible = false; tray.Dispose(); unknownIcon.Dispose(); traditionalIcon.Dispose(); simplifiedIcon.Dispose(); menu.Dispose(); window.Dispose();
         base.ExitThreadCore();
     }
     private sealed class HotkeyWindow : NativeWindow, IDisposable
     {
         private readonly Action pressed;
-        public HotkeyWindow(Action pressed) { this.pressed = pressed; CreateHandle(new CreateParams()); }
-        protected override void WndProc(ref Message m) { if (m.Msg == WM_HOTKEY) pressed(); base.WndProc(ref m); }
+        private readonly Action settingChanged;
+        public HotkeyWindow(Action pressed, Action settingChanged) { this.pressed = pressed; this.settingChanged = settingChanged; CreateHandle(new CreateParams()); }
+        public void NotifySettingChanged() => Native.PostMessage(Handle, WM_IME_SETTING_CHANGED, IntPtr.Zero, IntPtr.Zero);
+        protected override void WndProc(ref Message m) { if (m.Msg == WM_HOTKEY) pressed(); else if (m.Msg == WM_IME_SETTING_CHANGED) settingChanged(); base.WndProc(ref m); }
         public void Dispose() => DestroyHandle();
     }
 }
@@ -121,4 +152,5 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     [DllImport("user32.dll")] internal static extern short GetKeyState(int key);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 }

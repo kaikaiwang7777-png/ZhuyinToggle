@@ -4,6 +4,7 @@ internal sealed class SettingsForm : Form
 {
     private readonly TrayContext context;
     private readonly Label current = new() { AutoSize = true };
+    private readonly Label mode = new() { AutoSize = true, MaximumSize = new Size(420, 0) };
     private readonly Label feedback = new() { AutoSize = true, MaximumSize = new Size(420, 0) };
     private readonly TextBox recorder = new() { ReadOnly = true, Width = 280, PlaceholderText = "按下新的快捷鍵" };
     private readonly CheckBox startup = new() { Text = "登入時自動啟動", AutoSize = true };
@@ -20,7 +21,11 @@ internal sealed class SettingsForm : Form
         MaximizeBox = false;
         var layout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(16), AutoScroll = true };
         Controls.Add(layout);
-        layout.Controls.Add(new Label { Text = "微軟注音實際輸出：無法確認（切換功能尚未驗證）", AutoSize = true });
+        layout.Controls.Add(mode);
+        UpdateMode(context.ModeText, context.ModeError);
+        var toggle = new Button { Text = "切換繁簡設定", AutoSize = true };
+        toggle.Click += (_, _) => context.ToggleMode();
+        layout.Controls.Add(toggle);
         layout.Controls.Add(current);
         layout.Controls.Add(new Label { Text = "錄製快捷鍵（點選欄位後按下組合）", AutoSize = true });
         layout.Controls.Add(recorder);
@@ -48,6 +53,8 @@ internal sealed class SettingsForm : Form
         layout.Controls.Add(new Label { Text = "版本：0.1.0 開發版；尚未通過驗收", AutoSize = true });
         current.Text = "目前快捷鍵：" + context.CurrentHotkey;
     }
+    internal void UpdateMode(string setting, string? error)
+        => mode.Text = $"注音設定值：{setting}；實際輸出：未知" + (error is null ? "" : $"\n{error}");
     private void CaptureHotkey(object? sender, KeyEventArgs e)
     {
         uint modifiers = (e.Alt ? 1u : 0) | (e.Control ? 2u : 0) | (e.Shift ? 4u : 0);
