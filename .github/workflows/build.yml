@@ -18,6 +18,8 @@ jobs:
       - run: dotnet build tools/HotkeySmoke/HotkeySmoke.csproj -c Release
       - run: dotnet build tools/RegistryToggleProbe/RegistryToggleProbe.csproj -c Release
       - run: dotnet build tools/FocusResetProbe/FocusResetProbe.csproj -c Release
+      - run: dotnet build tools/CrossProcess/TestHost/TestHost.csproj -c Release
+      - run: dotnet build tools/CrossProcess/FocusController/FocusController.csproj -c Release
       - run: dotnet publish src/ZhuyinToggle/ZhuyinToggle.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/win-x64
       - uses: actions/upload-artifact@v4
         with:
