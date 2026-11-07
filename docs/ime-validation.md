@@ -10,9 +10,17 @@
 | PowerShell Set-ItemProperty -Type String | 0x00000000 → 0x00000001（回讀為 String） | 中國、電腦、學習 | 無 | 本次未立即轉為簡體 |
 | .NET RegistryKey.SetValue | 0x00000000 → 0x00000001（回讀為 String） | 中國、電腦、學習 | 無 | 本次未立即轉為簡體 |
 
-兩次直接寫入皆已恢復 REG_SZ 0x00000000。原生頁選簡體時指定登錄值並未改變，表示不能假定此值反映實際輸出狀態；原因尚未確定。使用者先前的 PowerShell 操作曾成功，仍需取得其確切命令、路徑及操作順序進行比較。不得以這次觀察否定使用者的結果。
+兩次直接寫入皆已恢復 REG_SZ 0x00000000。原生頁選簡體時指定登錄值並未改變，表示不能假定此值反映實際輸出狀態；原因尚未確定。使用者回報先前的 PowerShell 操作曾成功；不得以這次觀察否定使用者的結果。
 
-瀏覽器輸入、前景視窗 TSF 設定檔識別、通知機制、重新載入及不同 Windows 版本相容性尚未測試。不得把登錄讀寫成功視為輸出切換成功。未完成實際驗收前不得發布 v0.1.0。
+## 後續重現與儲存位置調查
+
+- 使用者後來提供的指令是 `reg add` 指定同一機碼、`REG_SZ`、資料 `0x00000001` 或 `0x00000000`；當時的實際輸出證據沒有保存。本次另以該 `reg add` 命令寫入 `0x00000001`，命令成功且 `reg query` 讀回 `REG_SZ 0x00000001`，同一記事本仍輸出「中國、電腦」；隨後以 `reg add` 還原 `0x00000000` 並讀回。此結果僅適用本次環境與操作條件。
+- 本次系統登錄所報版本為 DisplayVersion `26H2`、build `26300.9818`；「使用以前版本的微軟注音輸入法」顯示關閉，測試時未更動。相同記事本中，原生頁選繁體後觀察到「中國、電腦」，選簡體後觀察到「中国、电脑」，選回繁體後觀察到「中國」。未重新選取輸入法；作用中 TSF 設定檔仍未獨立驗證。
+- 對當前使用者 `Software\Microsoft\IME`、`Software\Microsoft\InputMethod` 和 `Software\Microsoft\CTF` 做切換前後快照：未辨識到可歸因於繁簡設定的變更；CTF 有組字計數變動。指定值在簡體期間仍讀為 `REG_SZ 0x00000000`。所檢查的 `Software\Microsoft\Windows\CurrentVersion\AppModel\SystemAppData` 鍵不存在或無法查詢，不能據此說該位置沒有變更。此比較不是完整系統追蹤，也不排除其他登錄位置、檔案、快取或 IPC。
+- 可見同一工作階段存在 `SystemSettings`、`ctfmon` 與 `TextInputHost`，但只有程序存在證據，**尚不知道是哪一程序執行設定寫入或通知**。尚未執行 ProcMon；目前程序的 Administrators SID 是 deny-only，並非已提升的系統管理員；ProcMon 的全系統擷取需要管理員權限。絕不提交原始追蹤或私人資料。
+- [Microsoft TSF 文件](https://learn.microsoft.com/en-us/windows/win32/tsf/predefined-compartments)說明轉換模式 compartment 屬於特定 thread manager；這不是它控制本設定或跨程序可安全修改的證據。尚無經驗證的設定寫入、通知或 C# 重現方法，私有介面相容性也尚無從評估。
+
+瀏覽器輸入、前景視窗 TSF 設定檔識別、實際通知機制與不同 Windows 版本相容性尚未測試。不得把登錄讀寫成功視為輸出切換成功。未完成實際驗收前不得發布 v0.1.0。
 
 ## 實驗腳本
 

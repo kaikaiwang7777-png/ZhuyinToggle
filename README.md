@@ -46,7 +46,7 @@ dotnet run --project tests/ZhuyinToggle.Tests/ZhuyinToggle.Tests.csproj -c Relea
 dotnet publish src/ZhuyinToggle/ZhuyinToggle.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-目前自動化測試只檢查快捷鍵資料規則，不代表全域註冊、設定錄製、自動啟動或注音切換通過實機驗收。GitHub Actions 的產物是實驗建置，不是 Release。
+目前自動化測試檢查快捷鍵資料規則及模擬註冊衝突、儲存失敗時的替換行為，不代表 Windows 全域註冊、設定錄製、自動啟動或注音切換通過實機驗收。GitHub Actions 的產物是實驗建置，不是 Release。
 
 ## 開源授權
 

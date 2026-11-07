@@ -34,8 +34,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly NotifyIcon tray;
     private readonly ContextMenuStrip menu = new();
     private readonly System.Windows.Forms.Timer clickTimer = new() { Interval = SystemInformation.DoubleClickTime };
-    private Hotkey? active;
-    private int activeId;
+    private readonly HotkeyCoordinator hotkeys;
     private SettingsForm? form;
     private static string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZhuyinToggle", "settings.json");
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -43,6 +42,7 @@ internal sealed class TrayContext : ApplicationContext
     public TrayContext()
     {
         window = new HotkeyWindow(() => MessageBox.Show("切換功能尚未驗證，暫不可用。", "ZhuyinToggle"));
+        hotkeys = new HotkeyCoordinator(new WindowsHotkeyRegistration(window.Handle), SaveHotkey);
         tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "ZhuyinToggle：輸出模式尚未確認", ContextMenuStrip = menu, Visible = true };
         menu.Items.Add("切換繁簡（尚未驗證）", null, (_, _) => Explain());
         menu.Items.Add("目前模式：無法確認").Enabled = false;
@@ -54,7 +54,7 @@ internal sealed class TrayContext : ApplicationContext
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); clickTimer.Start(); } };
         tray.MouseDoubleClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); ShowSettings(); } };
         Hotkey saved = Load();
-        if (!TryRegister(saved, out string error))
+        if (!hotkeys.Start(saved, out string error))
             MessageBox.Show("快捷鍵無法註冊，其他功能仍可使用。\n" + error, "ZhuyinToggle", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -64,40 +64,25 @@ internal sealed class TrayContext : ApplicationContext
         try { var key = JsonSerializer.Deserialize<Hotkey>(File.ReadAllText(SettingsPath)); return key is { IsValid: true } ? key : Hotkey.Default; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { return Hotkey.Default; }
     }
-    private bool TryRegister(Hotkey next, out string error)
+    private static void SaveHotkey(Hotkey next)
     {
-        error = "";
-        if (!next.IsValid) { error = "請使用至少一個修飾鍵加英數字或 F1–F12。"; return false; }
-        if (next == active) return true;
-        int id = activeId == 1 ? 2 : 1;
-        if (!Native.RegisterHotKey(window.Handle, id, next.Modifiers | 0x4000, (uint)next.Key))
-        { error = $"快捷鍵可能已被使用（Windows 錯誤碼 {Marshal.GetLastWin32Error()}）。"; return false; }
-        if (active is not null) Native.UnregisterHotKey(window.Handle, activeId);
-        active = next; activeId = id;
-        return true;
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        string temp = SettingsPath + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(next));
+        File.Move(temp, SettingsPath, true);
     }
-    internal bool ChangeHotkey(Hotkey next, out string error)
+    private sealed class WindowsHotkeyRegistration(IntPtr handle) : IHotkeyRegistration
     {
-        Hotkey? previous = active;
-        if (!TryRegister(next, out error)) return false;
-        try
+        public bool Register(int id, Hotkey key, out string error)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            string temp = SettingsPath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(next));
-            File.Move(temp, SettingsPath, true);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            if (previous is not null && previous != next && !TryRegister(previous, out _))
-                error = "儲存失敗，且原快捷鍵無法重新註冊；請重新設定。";
-            else if (previous is null) { Native.UnregisterHotKey(window.Handle, activeId); active = null; error = "儲存失敗，未保留新快捷鍵。"; }
-            else error = "儲存失敗，已還原原快捷鍵。";
+            if (Native.RegisterHotKey(handle, id, key.Modifiers | 0x4000, (uint)key.Key)) { error = ""; return true; }
+            error = $"快捷鍵可能已被使用（Windows 錯誤碼 {Marshal.GetLastWin32Error()}）。";
             return false;
         }
+        public void Unregister(int id) => Native.UnregisterHotKey(handle, id);
     }
-    internal string CurrentHotkey => active?.ToString() ?? "未註冊";
+    internal bool ChangeHotkey(Hotkey next, out string error) => hotkeys.Change(next, out error);
+    internal string CurrentHotkey => hotkeys.Active?.ToString() ?? "未註冊";
     internal bool StartupEnabled()
     {
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
@@ -114,7 +99,7 @@ internal sealed class TrayContext : ApplicationContext
     private void ShowSettings() { if (form is null || form.IsDisposed) form = new SettingsForm(this); form.Show(); form.Activate(); }
     protected override void ExitThreadCore()
     {
-        if (active is not null) Native.UnregisterHotKey(window.Handle, activeId);
+        hotkeys.Dispose();
         form?.Dispose(); clickTimer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); window.Dispose();
         base.ExitThreadCore();
     }
