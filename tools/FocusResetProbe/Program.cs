@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
+using FocusResetProbe;
 
 internal static class Program
 {
@@ -48,7 +49,10 @@ internal sealed class ProbeForm : Form
     readonly Button target = new() { Width = 2, Height = 2, TabStop = false, AccessibleName = "內部按鈕焦點目標" };
     readonly Label status = new() { AutoSize = false, Width = 740, Height = 70, Text = "請先按「開始測試」。只使用專用視窗內的可丟棄內容。" };
     readonly TextBox progress = new() { Width = 740, Height = 230, ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, TabStop = false, AccessibleName = "測試進度及結果" };
-    readonly System.Windows.Forms.Timer settle = new() { Interval = 700 };
+    System.Windows.Forms.Timer? settle, timeout;
+    readonly SampleGate gate = new();
+    readonly int[] groupOrder = [1, 2, 0];
+    int orderIndex;
     readonly List<string> focusEvents = [];
     bool active, blocked, inputExpected, driving, internalClear;
     string? original, expected, lastObserved;
@@ -65,7 +69,6 @@ internal sealed class ProbeForm : Form
         a.Enter += (_,_) => FocusEvent("A Enter"); a.Leave += (_,_) => FocusEvent("A Leave");
         b.Enter += (_,_) => FocusEvent("B Enter"); b.Leave += (_,_) => FocusEvent("B Leave"); target.Enter += (_,_) => FocusEvent("Button Enter"); target.Leave += (_,_) => FocusEvent("Button Leave");
         a.Changed += OnInputActivity; a.TextChanged += (_,_) => OnInputActivity();
-        settle.Tick += (_,_) => { settle.Stop(); Judge(); };
         start.Click += (_,_) => StartTest(); end.Click += (_,_) => Finish();
         FormClosing += (_, _) => { if (active) { Finish(); if (active) MessageBox.Show("未能安全還原，未覆寫設定。請依本機備份與 Windows 原生設定人工核對。", "需要人工檢查", MessageBoxButtons.OK, MessageBoxIcon.Warning); } };
     }
@@ -83,9 +86,9 @@ internal sealed class ProbeForm : Form
             using var k = Open(false); original = expected = Read(k);
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZhuyinToggle", "FocusProbeBackups"); Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fffffff}-{Guid.NewGuid():N}.txt"), $"原始 REG_SZ={original}\r\n");
-            active = true; blocked = false; group = phase = round = 0; start.Enabled = false; end.Enabled = true; a.Focus();
+            active = true; blocked = false; orderIndex = 0; group = groupOrder[orderIndex]; phase = round = 0; start.Enabled = false; end.Enabled = true; a.Focus();
             if (!OwnA() || !Profile.IsBopomofo(out string detail)) { Info("NOT TESTED：無法確認測試視窗使用微軟注音。請停止，未啟動切換。"); status.Text = "無法確認微軟注音，請按「結束並還原」。"; blocked = true; return; }
-            Info("作用中設定檔：" + detail); Info("備份完成；A/B/C 各五趟對照。文字未寫入檔案。");
+            Info("作用中設定檔：" + detail); Info("備份完成；先 B、C 各五趟，再 A 一趟。文字未寫入檔案。");
             if (!Safe()) { Stop("無法確認目前組字已結束"); return; }
             SetSetting(T); if (!blocked) Prompt();
         }
@@ -103,18 +106,27 @@ internal sealed class ProbeForm : Form
     void Prompt()
     {
         if (!Safe()) { Stop("無法確認輸入欄位與組字狀態"); return; }
-        internalClear = true; a.Clear(); internalClear = false; a.ResetEvidence(); inputExpected = true;
-        status.Text = $"{names[group]}：請用微軟注音輸入「電腦中國」，完成候選字後稍候。";
-        Info($"{names[group]}：{(phase == 0 ? "繁體基準" : phase == 1 ? "目標簡體" : "目標繁體")}，等待實際注音輸入。");
+        CancelTimers(); internalClear = true; a.Clear(); internalClear = false; a.ResetEvidence(); inputExpected = true;
+        int id = gate.Begin();
+        status.Text = $"樣本 #{id} 已就緒：請用微軟注音輸入「電腦中國」，完成候選字後稍候。";
+        Info($"樣本 #{id} 已就緒；{names[group]}：{(phase == 0 ? "繁體基準" : phase == 1 ? "目標簡體" : "目標繁體")}，等待實際注音輸入。");
+        timeout = new System.Windows.Forms.Timer { Interval = 45000 };
+        timeout.Tick += (_, _) => { if (!gate.Waiting || !gate.IsCurrent(id)) return; CancelTimers(); unknown[group]++; Stop($"樣本 #{id} 逾時：NOT TESTED"); };
+        timeout.Start();
     }
     void OnInputActivity()
     {
-        if (!active || blocked || !inputExpected || internalClear) return;
-        settle.Stop(); settle.Start();
+        if (!active || blocked || !inputExpected || internalClear || !gate.Waiting) return;
+        int id = gate.Id, revision = gate.Changed();
+        settle?.Stop(); settle?.Dispose();
+        var timer = new System.Windows.Forms.Timer { Interval = 700 }; settle = timer;
+        timer.Tick += (_, _) => { timer.Stop(); timer.Dispose(); if (ReferenceEquals(settle, timer)) settle = null; Judge(id, revision); };
+        timer.Start();
     }
-    void Judge()
+    void CancelTimers() { settle?.Stop(); settle?.Dispose(); settle = null; timeout?.Stop(); timeout?.Dispose(); timeout = null; }
+    void Judge(int id, int revision)
     {
-        if (!active || blocked || !inputExpected) return;
+        if (!active || blocked || !inputExpected || !gate.CanJudge(id, revision)) return;
         if (!OwnA()) { Stop("焦點已離開測試欄，不搶回"); return; }
         if (a.Composing || a.Candidate) return;
         if (a.TextLength < 4) return;
@@ -123,11 +135,12 @@ internal sealed class ProbeForm : Form
         string output = a.Text;
         bool allowed = output is "電腦中國" or "电脑中国" or "電腦中国" or "电脑中國";
         if (!allowed) { unknown[group]++; Stop("NOT TESTED：輸入不符合測試詞，不記錄其他文字"); return; }
-        inputExpected = false;
+        if (!gate.TryClaim(id, revision)) return;
+        CancelTimers(); inputExpected = false;
         bool success = output == (phase == 1 ? "电脑中国" : "電腦中國");
         bool validSource = phase == 0 || lastObserved == (phase == 1 ? "電腦中國" : "电脑中国");
         string verdict = !validSource ? "NOT TESTED" : success ? "PASS" : "FAIL";
-        Info($"{names[group]} {(phase == 0 ? "基準" : phase == 1 ? "繁→簡" : "簡→繁")}：{output}；{verdict}；IME start/end/result={a.Starts}/{a.Ends}/{a.Results}。");
+        Info($"樣本 #{id} {names[group]} {(phase == 0 ? "基準" : phase == 1 ? "繁→簡" : "簡→繁")}：{output}；{verdict}；IME start/end/result={a.Starts}/{a.Ends}/{a.Results}。");
         if (phase == 0 && !success) { unknown[group]++; Stop("繁體基準未成立，不能比較"); return; }
         if (phase != 0)
         {
@@ -141,10 +154,12 @@ internal sealed class ProbeForm : Form
             completedRounds[group]++;
             if (forwardPassed && lastObserved == "電腦中國" && success) passedRounds[group]++;
             round++;
-            Info($"{names[group]}：第 {round}/5 趟，成功 {passedRounds[group]}；單向 PASS={pass[group]} FAIL={fail[group]} NOT TESTED={unknown[group]}。");
-            if (round < 5) { phase = 1; BeginToggle(); return; }
-            group++; phase = round = 0;
-            if (group == 3) { Finish(); return; }
+            Info($"{names[group]}：第 {round}/{(group == 0 ? 1 : 5)} 趟，成功 {passedRounds[group]}；單向 PASS={pass[group]} FAIL={fail[group]} NOT TESTED={unknown[group]}。");
+            int targetRounds = group == 0 ? 1 : 5;
+            if (round < targetRounds) { phase = 1; BeginToggle(); return; }
+            orderIndex++;
+            if (orderIndex == groupOrder.Length) { Finish(); return; }
+            group = groupOrder[orderIndex]; phase = round = 0;
             SetSetting(T); if (!blocked) Prompt(); return;
         }
         phase++;
@@ -153,6 +168,7 @@ internal sealed class ProbeForm : Form
     void BeginToggle()
     {
         if (!Safe()) { Stop("組字結束狀態不明，停止切換"); return; }
+        int sampleId = gate.Id;
         string text = a.Text; int pos = a.SelectionStart, selection = a.SelectionLength; var fg = GetForegroundWindow(); uint tick = LastInput();
         try
         {
@@ -165,7 +181,7 @@ internal sealed class ProbeForm : Form
             // 回到 UI 訊息循環，之後驗證原焦點與使用者輸入沒有變動，再恢復 A。
             BeginInvoke(() =>
             {
-                if (!active || blocked) { driving = false; return; }
+                if (!active || blocked || !gate.IsCurrent(sampleId) || gate.Waiting) { driving = false; return; }
                 if (GetForegroundWindow() != fg || GetFocus() != other.Handle || LastInput() != tick || a.Composing || a.Candidate || !a.ImmSettled())
                 { driving = false; Stop("使用者輸入或焦點已改變，不奪回"); return; }
                 if (!a.Focus() || !OwnA()) { driving = false; Stop("無法恢復 A，不再嘗試"); return; }
@@ -198,10 +214,10 @@ internal sealed class ProbeForm : Form
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or InvalidOperationException) { Stop(ex.Message); }
     }
-    void Stop(string reason) { blocked = true; inputExpected = false; settle.Stop(); Info("停止：" + reason); status.Text = "測試已停止，請按「結束並還原」。"; }
+    void Stop(string reason) { blocked = true; inputExpected = false; CancelTimers(); gate.Invalidate(); Info("停止：" + reason); status.Text = "測試已停止，正在嘗試還原。"; if (active && !a.Composing && !a.Candidate) Finish(); }
     void Finish()
     {
-        settle.Stop(); inputExpected = false; blocked = true;
+        CancelTimers(); gate.Invalidate(); inputExpected = false; blocked = true;
         if (!active) { Close(); return; }
         try
         {

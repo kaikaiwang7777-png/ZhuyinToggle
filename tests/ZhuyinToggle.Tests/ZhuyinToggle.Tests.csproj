@@ -7,4 +7,5 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/ZhuyinToggle/ZhuyinToggle.csproj" /></ItemGroup>
+  <ItemGroup><Compile Include="../../tools/FocusResetProbe/SampleGate.cs" Link="SampleGate.cs" /></ItemGroup>
 </Project>

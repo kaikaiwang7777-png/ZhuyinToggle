@@ -5,6 +5,20 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+
+var sampleGate = new FocusResetProbe.SampleGate();
+int oldSample = sampleGate.Begin();
+int oldRevision = sampleGate.Changed();
+Check(sampleGate.TryClaim(oldSample, oldRevision), "current sample should be claimed once");
+Check(!sampleGate.TryClaim(oldSample, oldRevision), "duplicate callback must be rejected");
+int newSample = sampleGate.Begin();
+Check(!sampleGate.CanJudge(oldSample, oldRevision), "old sample callback must not judge new sample");
+int oldChange = sampleGate.Changed();
+sampleGate.Changed();
+Check(!sampleGate.CanJudge(newSample, oldChange), "stale input revision must be rejected");
+sampleGate.Invalidate();
+Check(!sampleGate.CanJudge(newSample, sampleGate.Revision), "cancelled sample cannot run");
+
 Check(Hotkey.Default.IsValid, "default shortcut should be valid");
 Check(DiagnosticLog.Create(false) is null, "diagnostics must be opt-in");
 Check(Hotkey.Default.ToString() == "Win + Alt + C", "default shortcut label");
