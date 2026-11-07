@@ -83,7 +83,8 @@ internal sealed class TrayContext : ApplicationContext
     private void UpdateMode()
     {
         string setting = ime.Current switch { ImeSetting.Traditional => "繁體", ImeSetting.Simplified => "簡體", _ => "未知" };
-        tray.Icon = ime.Current switch { ImeSetting.Traditional => traditionalIcon, ImeSetting.Simplified => simplifiedIcon, _ => unknownIcon };
+        // 登錄值可能與目前 IME 的實際輸出不一致；未有可靠的輸出模式查詢前不顯示繁／简。
+        tray.Icon = unknownIcon;
         tray.Text = $"ZhuyinToggle：設定值 {setting}；實際輸出未知";
         modeItem.Text = $"設定值：{setting}；實際輸出：未知";
         form?.UpdateMode(setting, ime.Error);
