@@ -6,6 +6,8 @@
 
 **專案狀態：開發中（Development）**
 
+> **尚不可用於切換輸出。** 開發版目前只包含系統匣、快捷鍵及設定介面骨架；實際輸出模式無法可靠判斷，切換功能刻意停用。請勿將建置產物視為正式版本。[測試紀錄](docs/ime-validation.md) 說明已知差異與驗證限制。
+
 ## 主要功能（規劃中）
 
 - **一鍵切換繁簡**：預設 `Win + Alt + C`，支援自訂快捷鍵。
@@ -33,6 +35,18 @@ Microsoft Bopomofo（微軟注音輸入法）
 - Windows Forms
 - Windows API（全域快捷鍵）
 - Windows Registry（微軟注音設定）
+
+## 建置開發版
+
+需要 Windows 11 x64 與 .NET 10 SDK：
+
+```powershell
+dotnet build src/ZhuyinToggle/ZhuyinToggle.csproj -c Release
+dotnet run --project tests/ZhuyinToggle.Tests/ZhuyinToggle.Tests.csproj -c Release
+dotnet publish src/ZhuyinToggle/ZhuyinToggle.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+```
+
+目前自動化測試只檢查快捷鍵資料規則，不代表全域註冊、設定錄製、自動啟動或注音切換通過實機驗收。GitHub Actions 的產物是實驗建置，不是 Release。
 
 ## 開源授權
 
