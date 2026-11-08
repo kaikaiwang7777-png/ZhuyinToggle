@@ -18,7 +18,7 @@ static class Program
         Application.Run(new TrayApplication());
     }
 }
-record Settings(uint Modifiers = 9, Keys Key = Keys.C);
+record Settings(uint Modifiers = 9, Keys Key = Keys.C, bool Reactivate = true, int DelayMs = 50);
 record CommandResult(string Script, string Arguments, string Stdout, string Stderr, int? ProcessExit, long Milliseconds, int? WriteExit, int? QueryExit, int? Mode, string Error);
 
 sealed class PowerShellCommands
@@ -75,11 +75,11 @@ sealed class TrayApplication : ApplicationContext
     const string RunName = "ZhuyinToggle-Manual";
     readonly string settingsPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZhuyinToggle-Manual", "settings.json");
     readonly NotifyIcon tray = new(); readonly HotkeyWindow hotkey = new(); readonly System.Windows.Forms.Timer clickTimer = new();
-    Settings settings = new(); SettingsForm? form; bool busy; bool hotkeyRegistered; int currentId = 1; int? mode; CommandResult? last; Icon? currentIcon;
+    Settings settings = new(); SettingsForm? form; bool busy; bool hotkeyRegistered; int currentId = 1; int? mode; CommandResult? last; Icon? currentIcon; string windowLog = "尚未執行視窗往返。";
     public TrayApplication()
     {
         try { if (File.Exists(settingsPath)) settings = JsonSerializer.Deserialize<Settings>(File.ReadAllText(settingsPath)) ?? new(); } catch { MessageBox.Show("無法讀取獨立設定，使用預設快捷鍵。", "注音切換"); }
-        hotkey.Pressed += async () => await Change(null);
+        hotkey.Pressed += async () => { var original = WindowRoundTrip.Capture(); await Change(null, original); };
         hotkeyRegistered = hotkey.Register(currentId, settings);
         var menu = new ContextMenuStrip();
         menu.Items.Add("切換", null, async (_, _) => await Change(null));
@@ -95,10 +95,11 @@ sealed class TrayApplication : ApplicationContext
         _ = RefreshMode();
     }
     async Task RefreshMode() { if (busy) return; busy = true; try { last = await PowerShellCommands.Run(null); mode = last.Error.Length == 0 ? last.Mode : null; UpdateDisplay(); } finally { busy = false; } }
-    async Task Change(int? requested)
+    async Task Change(int? requested, WindowRoundTrip.Original? original = null)
     {
         if (busy) { tray.ShowBalloonTip(2000, "處理中", "上一次操作尚未完成。", ToolTipIcon.Info); return; }
         busy = true;
+        windowLog = original is null ? "非熱鍵操作；未執行視窗往返。" : $"切換前原視窗：HWND 0x{original.Value.Handle.ToInt64():X}，PID {original.Value.ProcessId}；尚未執行。";
         try {
             var before = await PowerShellCommands.Run(null); last = before;
             if (before.Error.Length != 0 || before.Mode is null) { mode = null; throw new InvalidOperationException("無法確認目前設定；未寫入。" + before.Error); }
@@ -106,6 +107,14 @@ sealed class TrayApplication : ApplicationContext
             last = await PowerShellCommands.Run(target);
             if (last.Error.Length != 0) { mode = null; throw new InvalidOperationException(last.Error); }
             mode = last.Mode; UpdateDisplay();
+            if (original is not null && settings.Reactivate)
+            {
+                string result = await WindowRoundTrip.Run(original.Value, settings);
+                windowLog = result;
+                if (!result.StartsWith("完成", StringComparison.Ordinal))
+                    tray.ShowBalloonTip(5000, "設定已更新，視窗重新啟用未完成。", result, ToolTipIcon.Warning);
+            }
+            else if (original is not null) windowLog += " 自動重新啟用已關閉。";
         } catch (Exception e) { UpdateDisplay(); tray.ShowBalloonTip(5000, "切換未確認", e.Message, ToolTipIcon.Error); if (form is { IsDisposed: false }) MessageBox.Show(form, e.Message, "切換未確認"); }
         finally { busy = false; }
     }
@@ -127,14 +136,18 @@ sealed class TrayApplication : ApplicationContext
     public bool ChangeHotkey(Settings s, out string error)
     {
         error = ""; if ((s.Modifiers & 15) == 0 || s.Key is Keys.None or Keys.ControlKey or Keys.Menu or Keys.ShiftKey or Keys.LWin or Keys.RWin) { error = "請選擇至少一個修飾鍵及一般按鍵。"; return false; }
-        if (s == settings && hotkeyRegistered) return true;
+        if (s.Modifiers == settings.Modifiers && s.Key == settings.Key && hotkeyRegistered)
+        {
+            try { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(settingsPath)!); File.WriteAllText(settingsPath, JsonSerializer.Serialize(s)); settings = s; return true; }
+            catch (Exception ex) { error = "儲存失敗：" + ex.Message; return false; }
+        }
         int newId = currentId == 1 ? 2 : 1;
         if (!hotkey.Register(newId, s)) { error = "快捷鍵註冊失敗，可能已被占用；原快捷鍵維持不變。"; return false; }
         try { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(settingsPath)!); File.WriteAllText(settingsPath, JsonSerializer.Serialize(s)); }
         catch (Exception ex) { hotkey.Unregister(newId); error = "儲存失敗，原快捷鍵維持不變：" + ex.Message; return false; }
         if (hotkeyRegistered) hotkey.Unregister(currentId); currentId = newId; settings = s; hotkeyRegistered = true; return true;
     }
-    public string LastCommand => last is null ? "尚無命令。" : $"PowerShell：{PowerShellCommands.PathName}\r\n參數：{last.Arguments}\r\n\r\n完整腳本：\r\n{last.Script}\r\n寫入退出碼：{last.WriteExit?.ToString() ?? "未執行"}\r\n查詢退出碼：{last.QueryExit?.ToString() ?? "未取得"}\r\n程序退出碼：{last.ProcessExit}\r\n耗時：{last.Milliseconds} ms\r\n讀回設定：{(last.Mode == 0 ? "繁體" : last.Mode == 1 ? "簡體" : "未知")}\r\n錯誤：{last.Error}\r\n\r\nstdout：\r\n{last.Stdout}\r\nstderr：\r\n{last.Stderr}";
+    public string LastCommand => last is null ? "尚無命令。\r\n" + windowLog : $"PowerShell：{PowerShellCommands.PathName}\r\n參數：{last.Arguments}\r\n\r\n完整腳本：\r\n{last.Script}\r\n寫入退出碼：{last.WriteExit?.ToString() ?? "未執行"}\r\n查詢退出碼：{last.QueryExit?.ToString() ?? "未取得"}\r\n程序退出碼：{last.ProcessExit}\r\n耗時：{last.Milliseconds} ms\r\n讀回設定：{(last.Mode == 0 ? "繁體" : last.Mode == 1 ? "簡體" : "未知")}\r\n錯誤：{last.Error}\r\n\r\nstdout：\r\n{last.Stdout}\r\nstderr：\r\n{last.Stderr}\r\n\r\n視窗往返：{windowLog}";
     public Task Toggle() => Change(null);
     protected override void ExitThreadCore() { clickTimer.Stop(); clickTimer.Dispose(); form?.Dispose(); hotkey.Dispose(); tray.Visible = false; tray.Dispose(); currentIcon?.Dispose(); base.ExitThreadCore(); }
 }
@@ -144,13 +157,18 @@ sealed class SettingsForm : Form
     readonly TrayApplication app; readonly Label status = new() { AutoSize = true }; readonly TextBox capture = new() { ReadOnly = true, Width = 240 }; readonly CheckBox startup = new() { Text = "登入時自動啟動（預設關閉）", AutoSize = true }; Settings pending;
     public SettingsForm(TrayApplication app)
     {
-        this.app = app; pending = app.Current; Text = "注音切換－人工驗收開發版"; Width = 510; Height = 310; StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false;
+        this.app = app; pending = app.Current; Text = "注音切換－人工驗收開發版"; Width = 540; Height = 410; StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false;
         var p = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(14), WrapContents = false, AutoScroll = true }; Controls.Add(p);
         p.Controls.Add(status); p.Controls.Add(new Label { Text = "點選下方欄位，再按新的快捷鍵：", AutoSize = true }); p.Controls.Add(capture);
-        capture.KeyDown += (_, e) => { e.SuppressKeyPress = true; uint m = (e.Control ? 2u : 0) | (e.Alt ? 1u : 0) | (e.Shift ? 4u : 0) | ((GetKeyState(0x5B) < 0 || GetKeyState(0x5C) < 0) ? 8u : 0); if (e.KeyCode is Keys.ControlKey or Keys.Menu or Keys.ShiftKey or Keys.LWin or Keys.RWin) return; pending = new Settings(m, e.KeyCode); ShowHotkey(); };
+        capture.KeyDown += (_, e) => { e.SuppressKeyPress = true; uint m = (e.Control ? 2u : 0) | (e.Alt ? 1u : 0) | (e.Shift ? 4u : 0) | ((GetKeyState(0x5B) < 0 || GetKeyState(0x5C) < 0) ? 8u : 0); if (e.KeyCode is Keys.ControlKey or Keys.Menu or Keys.ShiftKey or Keys.LWin or Keys.RWin) return; pending = pending with { Modifiers = m, Key = e.KeyCode }; ShowHotkey(); };
         ShowHotkey(); var save = new Button { Text = "儲存快捷鍵", AutoSize = true }; save.Click += (_, _) => { if (!app.ChangeHotkey(pending, out string error)) MessageBox.Show(this, error, "快捷鍵"); else MessageBox.Show(this, "快捷鍵已儲存。", "快捷鍵"); }; p.Controls.Add(save);
         try { startup.Checked = app.Autostart; } catch { startup.Enabled = false; }
         startup.CheckedChanged += (_, _) => { try { app.SetAutostart(startup.Checked); } catch (Exception ex) { MessageBox.Show(this, "無法修改自動啟動：" + ex.Message); startup.Enabled = false; } }; p.Controls.Add(startup);
+        var reactivate = new CheckBox { Text = "熱鍵切換後，自動重新啟用原視窗（待驗證）", AutoSize = true, Checked = pending.Reactivate }; p.Controls.Add(reactivate);
+        var delayRow = new FlowLayoutPanel { AutoSize = true }; p.Controls.Add(delayRow);
+        delayRow.Controls.Add(new Label { Text = "往返間隔：", AutoSize = true });
+        var delay = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100 }; delay.Items.AddRange(new object[] { 50, 100, 150 }); delay.SelectedItem = new[] { 50, 100, 150 }.Contains(pending.DelayMs) ? pending.DelayMs : 50; delayRow.Controls.Add(delay);
+        var saveWindow = new Button { Text = "儲存視窗設定", AutoSize = true }; saveWindow.Click += (_, _) => { var proposed = app.Current with { Reactivate = reactivate.Checked, DelayMs = (int)delay.SelectedItem! }; if (!app.ChangeHotkey(proposed, out string error)) MessageBox.Show(this, error, "視窗設定"); else { pending = pending with { Reactivate = proposed.Reactivate, DelayMs = proposed.DelayMs }; MessageBox.Show(this, "視窗設定已儲存。", "視窗設定"); } }; p.Controls.Add(saveWindow);
         var row = new FlowLayoutPanel { AutoSize = true }; p.Controls.Add(row);
         var toggle = new Button { Text = "切換繁簡設定", AutoSize = true }; toggle.Click += async (_, _) => await app.Toggle(); row.Controls.Add(toggle);
         var details = new Button { Text = "查看最近一次命令", AutoSize = true }; details.Click += (_, _) => { var f = new Form { Text = "最近一次命令及結果", Width = 850, Height = 600, StartPosition = FormStartPosition.CenterParent }; var box = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, Text = app.LastCommand }; f.Controls.Add(box); f.ShowDialog(this); f.Dispose(); }; row.Controls.Add(details);
@@ -159,4 +177,61 @@ sealed class SettingsForm : Form
     [DllImport("user32.dll")] static extern short GetKeyState(int key);
     void ShowHotkey() { capture.Text = ((pending.Modifiers & 8) != 0 ? "Win + " : "") + ((pending.Modifiers & 2) != 0 ? "Ctrl + " : "") + ((pending.Modifiers & 1) != 0 ? "Alt + " : "") + ((pending.Modifiers & 4) != 0 ? "Shift + " : "") + pending.Key; }
     public void SetStatus(string text) => status.Text = $"目前設定：{text}；實際輸出待人工驗收。";
+}
+
+// 實驗性頂層視窗往返；不修改第三方文字控制項，也不注入鍵盤。
+static class WindowRoundTrip
+{
+    public readonly record struct Original(IntPtr Handle, uint ProcessId);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string? title);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+    [StructLayout(LayoutKind.Sequential)] struct LastInput { public uint Size; public uint Time; }
+    [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LastInput info);
+    static uint? LastInputTime() { var x = new LastInput { Size = (uint)Marshal.SizeOf<LastInput>() }; return GetLastInputInfo(ref x) ? x.Time : null; }
+    public static Original Capture() { IntPtr h = GetForegroundWindow(); GetWindowThreadProcessId(h, out uint pid); return new(h, pid); }
+    static bool Valid(Original o) { if (o.Handle == IntPtr.Zero || !IsWindow(o.Handle)) return false; GetWindowThreadProcessId(o.Handle, out uint p); return p == o.ProcessId && p != 0; }
+    static bool KeysDown(Settings s) => (GetAsyncKeyState((int)s.Key) & 0x8000) != 0 || ((s.Modifiers & 1) != 0 && (GetAsyncKeyState(0x12) & 0x8000) != 0) || ((s.Modifiers & 2) != 0 && (GetAsyncKeyState(0x11) & 0x8000) != 0) || ((s.Modifiers & 4) != 0 && (GetAsyncKeyState(0x10) & 0x8000) != 0) || ((s.Modifiers & 8) != 0 && ((GetAsyncKeyState(0x5B) | GetAsyncKeyState(0x5C)) & 0x8000) != 0);
+    public static async Task<string> Run(Original o, Settings settings)
+    {
+        var clock = Stopwatch.StartNew(); bool taskbarOk = false, restored = false;
+        string Result(string reason) => $"{reason}；原視窗 HWND 0x{o.Handle.ToInt64():X}，PID {o.ProcessId}；設定已寫入並回讀；工作列啟用：{(taskbarOk ? "成功" : "未確認")}；原視窗恢復：{(restored ? "成功" : "未確認")}；耗時 {clock.ElapsedMilliseconds}ms。";
+        if (!Valid(o)) return Result("取消：原視窗不存在或程序身分已變更");
+        if (GetForegroundWindow() != o.Handle) return Result("取消：使用者已離開原視窗");
+        while (KeysDown(settings) && clock.ElapsedMilliseconds < 1000) { await Task.Delay(10); if (!Valid(o) || GetForegroundWindow() != o.Handle) return Result("取消：等待按鍵釋放時前景改變"); }
+        if (KeysDown(settings)) return Result("取消：快捷鍵未於限時內釋放");
+        var lastInput = LastInputTime(); if (lastInput is null) return Result("取消：無法確認輸入狀態");
+        IntPtr taskbar = FindWindow("Shell_TrayWnd", null); if (taskbar == IntPtr.Zero || !IsWindow(taskbar)) return Result("取消：找不到工作列");
+        if (!Valid(o) || GetForegroundWindow() != o.Handle || LastInputTime() != lastInput) return Result("取消：操作前輸入或前景已改變");
+        if (!SetForegroundWindow(taskbar)) return Result("失敗：系統拒絕啟用工作列");
+        var start = clock.ElapsedMilliseconds;
+        while (GetForegroundWindow() != taskbar && clock.ElapsedMilliseconds - start < 250)
+        {
+            var fg = GetForegroundWindow(); if (fg != o.Handle && fg != taskbar) return Result("取消：前景變為其他視窗");
+            if (!Valid(o) || LastInputTime() != lastInput) return Result("取消：原視窗或輸入狀態變更");
+            await Task.Delay(10);
+        }
+        if (GetForegroundWindow() != taskbar) return Result("失敗：未確認工作列成為前景");
+        taskbarOk = true; start = clock.ElapsedMilliseconds;
+        int delay = settings.DelayMs is 50 or 100 or 150 ? settings.DelayMs : 50;
+        while (clock.ElapsedMilliseconds - start < delay)
+        {
+            if (GetForegroundWindow() != taskbar || !Valid(o) || LastInputTime() != lastInput) return Result("取消：等待期間前景、原視窗或輸入狀態變更");
+            await Task.Delay(10);
+        }
+        if (GetForegroundWindow() != taskbar || !Valid(o) || LastInputTime() != lastInput) return Result("取消：恢復前條件已變更");
+        if (!SetForegroundWindow(o.Handle)) return Result("失敗：系統拒絕恢復原視窗");
+        start = clock.ElapsedMilliseconds;
+        while (clock.ElapsedMilliseconds - start < 250)
+        {
+            if (!Valid(o) || LastInputTime() != lastInput) return Result("取消：恢復期間原視窗或輸入狀態變更");
+            var fg = GetForegroundWindow(); if (fg == o.Handle) { restored = true; return Result("完成：已確認前景返回原視窗"); }
+            if (fg != taskbar) return Result("取消：恢復期間前景變為其他視窗");
+            await Task.Delay(10);
+        }
+        return Result("失敗：未在限時內確認原視窗恢復");
+    }
 }
