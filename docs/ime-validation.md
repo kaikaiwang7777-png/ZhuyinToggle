@@ -148,3 +148,13 @@ Chromium 的 [多程序架構](https://www.chromium.org/developers/design-docume
 簡體命令後，背景觀察器在組字前讀到 REG_SZ `0x00000000`；沒有取得短命 reg.exe 的退出碼、PID、寫入端讀值或直接寫入事件，故不能聲稱設定值確實為 1、命令退出成功或已確定實體位置。輸出觀察顯示本次執行對話框路徑具有繁簡往返現象，但需要具歧義釐清的精確程序／讀寫證據才能確認命令與輸出因果。測試後背景讀到原值 0，實際繁體輸出亦確認。
 
 另外透過「執行」對話框嘗試啟動 `wt.exe -w new new-tab --title "ZT-PS-Repro" --suppressApplicationTitle powershell.exe -NoExit`，但工具視窗清單中未觀察到可操作的專用終端與 PowerShell 提示；沒有輸入識別文字或 PowerShell 命令。可見 PowerShell 組為 NOT TESTED，不能與執行對話框組比較或宣稱重現 Owner 過往 PowerShell 操作。未重做焦點實驗，正式產品未修改。
+
+## 同輪桌面與背景原始 reg query 對照
+
+唯讀稽核目前 `RegistryImeStore.Read`：完整路徑為 `HKCU\SOFTWARE\Microsoft\IME\15.0\IMETC`，值名 `Enable Simplified Chinese Output`；先檢查存在與 REG_SZ，僅明確字串 0／1 映射繁／簡，其他情況丟出例外，`Refresh` 將可處理讀取錯誤標為 Unknown，並非解析錯誤一律回傳 0。先前背景直接讀取是該輪的即時 `RegistryKey.GetValue`，不是本次雙來源腳本；此稽核不能證明所有歷史觀察程式均無誤。
+
+本次使用同一份唯讀腳本（本機檔案 SHA256 `EFC915BB56151A1054012807460FF99C8CBED15AE1609DEE71C22325D60E09D6`），分別由桌面「執行」與背景啟動；每筆呼叫 `C:\Windows\System32\reg.exe query`，分開保留 stdout、stderr、退出碼、PID、UTC、QPC 與唯一輪次，原始記錄僅在私人本機。兩個查詢程序記錄的 SID 相同、Session 均 1、均為 64 位元，reg.exe 的路徑與版本字串相同。桌面腳本記錄了 SHA256；背景腳本該欄為空，因此雖然兩次均指向同一路徑，**未獨立核實背景執行時檔案雜湊**；不能以路徑或 SID 相同證明同一實體登錄檢視。
+
+原始繁體基準 REG_SZ 為 0，專用宿主以注音組字得到「電腦中國」及 TSF 設定檔／IME 事件。透過桌面「執行」提交未包裝的原始 reg add 簡體命令；在同一輸出簡體期間、還原前，選取同一 QPC 時間窗的各 7 筆成功 query：桌面 stdout 7/7 為 `REG_SZ 0x00000001`，背景 stdout 7/7 為 `REG_SZ 0x00000000`，退出碼均 0、stderr 均空。宿主以實際注音輸出「电脑中国」，IME 開始／結果／結束有記錄；在判讀完成後才經桌面「執行」提交原始繁體還原命令，兩來源之後均讀到 REG_SZ 0，宿主實際輸出「電腦中國」。這些 query 是獨立程序、離散取樣，不與寫入原子化，寫入命令退出碼未取得。
+
+因此此輪差異已在 **reg.exe 的原始 stdout** 發生，而非僅觀察器將輸出解析為 0；這是可重現的來源差異，但不是已確認虛擬化、MSIX 或任一內部機制的證據。下一步應查兩啟動來源的有效登錄根與執行環境差異，並修正背景記錄的雜湊缺口，再評估相同執行檔由背景啟動的行為；不得直接把桌面命令整合為安全產品。測試結束後原始繁體設定與實際輸出已恢復，查詢已停止；未改正式產品，PR 保持 Draft。
