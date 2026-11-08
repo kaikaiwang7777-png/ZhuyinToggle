@@ -1,6 +1,6 @@
-# ZhuyinToggle — 微軟注音繁簡快速切換工具
+# ZhuyinToggle — 微軟注音繁簡設定快捷切換工具
 
-一款針對 Windows 微軟注音（Microsoft Bopomofo）繁簡設定的受限開發版工具。
+一款針對 Windows 微軟注音（Microsoft Bopomofo）繁簡設定的受限開發版工具，**不是已驗證的即時無感繁簡輸出切換器**。
 
 不需要更換輸入法；透過快捷鍵可修改注音設定值，但**不保證目前輸入視窗立即改變實際輸出**。
 
