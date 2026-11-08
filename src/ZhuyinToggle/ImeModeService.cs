@@ -51,9 +51,9 @@ internal sealed class ImeModeService(IImeStore store, DiagnosticLog? diagnostics
     {
         lock (gate)
         {
-            try { Current = store.Read(); Error = null; }
+            try { Current = store.Read(); Error = null; diagnostics?.Write("service_read", new { status = "ok", source = "IImeStore.Read", value = Current.ToString() }); }
             catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.Security.SecurityException)
-            { Current = ImeSetting.Unknown; Error = ex.Message; }
+            { Current = ImeSetting.Unknown; Error = ex.Message; diagnostics?.Write("service_read", new { status = "error", source = "IImeStore.Read", error = ex.GetType().Name }); }
         }
         Changed?.Invoke();
     }
