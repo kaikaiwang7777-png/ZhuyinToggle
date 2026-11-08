@@ -1,3 +1,5 @@
+> **歷史紀錄：**本文件描述特定版本與當時的研究決策，不代表目前發布狀態。現行方案見 [最終實作](final-implementation.zh-TW.md)，驗收範圍見 [v0.1.0 驗收](release-acceptance-v0.1.0.zh-TW.md)。
+
 # 跨程序焦點實驗紀錄
 
 ## 條件與觀察
