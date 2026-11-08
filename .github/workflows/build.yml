@@ -1,0 +1,27 @@
+name: Windows build
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build src/ZhuyinToggle/ZhuyinToggle.csproj -c Release
+      - run: dotnet run --project tests/ZhuyinToggle.Tests/ZhuyinToggle.Tests.csproj -c Release
+      - run: dotnet build tools/UiAutomationProbe/UiAutomationProbe.csproj -c Release
+      - run: dotnet build tools/HotkeySmoke/HotkeySmoke.csproj -c Release
+      - run: dotnet build tools/RegistryToggleProbe/RegistryToggleProbe.csproj -c Release
+      - run: dotnet build tools/FocusResetProbe/FocusResetProbe.csproj -c Release
+      - run: dotnet build tools/CrossProcess/TestHost/TestHost.csproj -c Release
+      - run: dotnet build tools/CrossProcess/FocusController/FocusController.csproj -c Release
+      - run: dotnet publish manual-build/src/ZhuyinToggle/ZhuyinToggle.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -o artifacts/manual-win-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manual-build-ci-win-x64-not-owner-tested
+          path: artifacts/manual-win-x64/

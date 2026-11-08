@@ -1,43 +1,27 @@
-# ZhuyinToggle — 微軟注音繁簡快速切換工具
+# ZhuyinToggle v0.1.0
 
-一款專為 Windows 微軟注音（Microsoft Bopomofo）設計的輕量級繁體／簡體中文切換工具。
+Windows 11 x64 的微軟注音繁簡設定快捷工具。Owner 已在其測試環境確認本版可用；其他環境的相容性仍需自行確認。取得方式：[v0.1.0 下載頁](https://github.com/kaikaiwang7777-png/ZhuyinToggle/releases/tag/v0.1.0)。
 
-不需要更換輸入法，也不必每次進入 Windows 設定。透過自訂快捷鍵，即可快速切換微軟注音的繁簡輸出模式。
+## 安裝與使用
 
-**專案狀態：開發中（Development）**
+下載 Windows x64 ZIP，先正常結束舊版，再解壓到固定資料夾並雙擊 `ZhuyinToggle.exe`。此版本自包含，無須安裝 .NET；通知區域圖示可能位於隱藏圖示中。
 
-## 主要功能（規劃中）
+預設 **Win + Alt + C**。先完成目前的注音組字及選字，再按快捷鍵；待原輸入視窗返回後才繼續輸入。切換期間請勿連按快捷鍵、切換其他視窗或持續打字。
 
-- **一鍵切換繁簡**：預設 `Win + Alt + C`，支援自訂快捷鍵。
-- **系統匣狀態顯示**：繁體模式顯示「繁」，簡體模式顯示「简」。
-- **快捷鍵衝突檢查**：自動檢查快捷鍵是否已被其他程式占用。
-- **開機自動啟動**：登入 Windows 後自動在背景執行，可自行停用。
-- **輕量化設計**：不需常駐主視窗，不依賴 PowerToys。
-- **簡單直覺**：支援滑鼠點擊圖示切換繁簡，以及右鍵開啟設定。
+程式會修改微軟注音繁簡設定，然後嘗試短暫啟用工作列並返回原視窗。Owner 本機體感約 0.5～1 秒，視窗可能短暫跳動；時間依電腦與應用程式而異，50／100／150 ms 只設定往返間隔，並非整體耗時。系統可能拒絕返回。組字中途操作及未測試應用程式均不保證相容。
 
-## 系統需求
+系統匣「繁／简」只表示讀回的設定值，不是對所有應用程式實際輸出的獨立偵測。如果輸出未更新或返回失敗，可在設定中查看最近操作紀錄供問題回報。記錄包含操作時的 HWND、程序 ID、視窗類別與命令結果，不含視窗標題；分享前仍請檢查內容。
 
-Windows 11 x64
+- 單擊圖示切換設定；雙擊開設定；右鍵可切換、指定繁體／簡體、設定或結束。**自動視窗往返只由熱鍵觸發**，滑鼠選單與設定按鈕不執行往返。
+- 設定中錄製並儲存自訂快捷鍵；註冊衝突時可使用滑鼠。可開啟或關閉登入自啟、切換通知、熱鍵後自動視窗往返，並調整往返間隔。通知預設關閉；視窗往返預設開啟。
+- 退出請使用系統匣右鍵「結束程式」。移除前請先在設定關閉登入自啟，結束後刪除解壓資料夾。獨立設定位於 `%LOCALAPPDATA%\ZhuyinToggle-Manual`，不會在退出時自動刪除；不再需要時可自行刪除。程式不會在退出時還原繁簡設定。
 
-Microsoft Bopomofo（微軟注音輸入法）
+執行檔介面保留「人工驗收開發版」字樣，因正式包使用 Owner 驗收的同一份 EXE，未因封版修改。程式使用目前使用者權限與 PowerShell，不要求關閉防護。
 
-## 使用方式
+## 開發者文件
 
-正式版本發布後，使用者可以從 GitHub Releases 下載程式，啟動後即可透過系統匣操作或快捷鍵切換繁簡。
+- [開發歷程](docs/development-retrospective.zh-TW.md)
+- [最終實作與選案](docs/final-implementation.zh-TW.md)
+- [v0.1.0 驗收紀錄](docs/release-acceptance-v0.1.0.zh-TW.md)
 
-目前尚未發布可供下載的正式版本。
-
-## 開發技術
-
-- C# / .NET 10
-- Windows Forms
-- Windows API（全域快捷鍵）
-- Windows Registry（微軟注音設定）
-
-## 開源授權
-
-本專案採用 MIT License 授權，歡迎自由使用、修改與貢獻。
-
----
-
-ZhuyinToggle is a lightweight Windows utility for switching Microsoft Bopomofo between Traditional and Simplified Chinese. Currently under development.
+正式來源為 `manual-build/src/ZhuyinToggle/`；舊 `src/`、`tools/` 和歷史研究文件保留供參考。授權見 [LICENSE](LICENSE)。
