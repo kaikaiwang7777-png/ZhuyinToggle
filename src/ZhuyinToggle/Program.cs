@@ -11,10 +11,11 @@ internal static class Program
     {
         using var mutex = new Mutex(true, @"Local\ZhuyinToggle", out bool created);
         if (!created) { MessageBox.Show("ZhuyinToggle 已在執行。", "ZhuyinToggle"); return; }
-        bool regBackend = args.Contains("--backend", StringComparer.OrdinalIgnoreCase) && args.Zip(args.Skip(1)).Any(p => p.First.Equals("--backend", StringComparison.OrdinalIgnoreCase) && p.Second.Equals("reg-exe", StringComparison.OrdinalIgnoreCase));
-        if (args.Contains("--backend", StringComparer.OrdinalIgnoreCase) && !regBackend) { MessageBox.Show("未知的後端；未啟動。", "ZhuyinToggle"); return; }
+        string backend = "dotnet";
+        int backendIndex = Array.FindIndex(args, x => x.Equals("--backend", StringComparison.OrdinalIgnoreCase));
+        if (backendIndex >= 0) { if (backendIndex + 1 >= args.Length || (args[backendIndex + 1] != "reg-exe" && args[backendIndex + 1] != "powershell")) { MessageBox.Show("未知的後端；未啟動。", "ZhuyinToggle"); return; } backend = args[backendIndex + 1]; }
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayContext(DiagnosticLog.Create(args.Contains("--diagnostics", StringComparer.OrdinalIgnoreCase)), regBackend));
+        Application.Run(new TrayContext(DiagnosticLog.Create(args.Contains("--diagnostics", StringComparer.OrdinalIgnoreCase)), backend));
     }
 }
 
@@ -53,12 +54,12 @@ internal sealed class TrayContext : ApplicationContext
     private static string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZhuyinToggle", "settings.json");
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
-    public TrayContext(DiagnosticLog? diagnostics = null, bool regBackend = false)
+    public TrayContext(DiagnosticLog? diagnostics = null, string backend = "dotnet")
     {
         this.diagnostics = diagnostics;
         _ = dispatcher.Handle;
-        ime = new ImeModeService(regBackend ? new RegExeImeStore(diagnostics) : new RegistryImeStore(), diagnostics);
-        diagnostics?.Write("backend", new { value = regBackend ? "reg-exe" : "dotnet" });
+        ime = new ImeModeService(backend switch { "powershell" => new PowerShellImeStore(diagnostics), "reg-exe" => new RegExeImeStore(diagnostics), _ => new RegistryImeStore() }, diagnostics);
+        diagnostics?.Write("backend", new { value = backend });
         window = new HotkeyWindow(id => { diagnostics?.Write("wm_hotkey", new { id }); ToggleMode("hotkey", id); }, () => { if (!toggleBusy) ime.Refresh(); });
         hotkeys = new HotkeyCoordinator(new WindowsHotkeyRegistration(window.Handle), SaveHotkey);
         int iconSize = Math.Clamp(SystemInformation.SmallIconSize.Width, 16, 256);
