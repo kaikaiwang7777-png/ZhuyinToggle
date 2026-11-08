@@ -58,3 +58,11 @@
 在可丟棄 TestHost 的本程序 TSF 設定檔檢查辨識 Microsoft Bopomofo、語言 0404 後，以實際注音鍵位輸入，觀察 IME_START、IME_RESULT、IME_END 和文字變更；繁體基準為「電腦中國」。保持宿主前景，透過預設快捷鍵觸發受限版，診斷顯示 REG_SZ 從 0 寫入 1 並回讀；隨後以注音鍵位再次組字，仍得到「電腦中國」，而非預期的「电脑中国」，可重現設定與輸出不同步。再次使用快捷鍵後回讀原值 0。這是一次受控宿主試驗，不代表記事本或 Chrome 的新測試，也不證明所有 TSF 組字狀態都可由 IMM 訊息觀察。
 
 本次原生設定頁的輔助使用介面無法取得可用控制項狀態，沒有盲目操作選項，因此原生組的同步讀值與輸出、與其對照的 ETW 均為 NOT TESTED。先前原生組監測不一致的原因仍未釐清；尚須排查原生程序有效登錄位置、套件身分相關重新導向、採樣時序及其他設定或狀態更新，不應把任何一項視為已證實。沒有找到足以實作的通知或 C# 更新候選。未建立新 ETW 工作階段；本次測試程序已退出，登錄值回讀原始 REG_SZ `0x00000000`。正式功能與灰色未知圖示未變更。
+
+## 既有 ProcMon 對照再核與登錄虛擬化範圍
+
+唯讀重查既有 CSV（不是新的同步擷取）：目標設定的 `RegQueryValue`／`RegSetValue` 共 11 筆，匯出路徑均顯示為 `HKCU\Software\Microsoft\IME\15.0\IMETC\Enable Simplified Chinese Output`。其中 SystemSettings 先寫入 REG_SZ `0x00000001`，約 2.591 秒後寫回 `0x00000000`；這兩次之間 CSV 沒有列出 ctfmon 對該值的成功查詢，之後才列出讀取 0。這只能描述既有擷取中被列出的操作，不能證明 ctfmon 未以其他方式存取狀態、也不能將此擷取直接配對先前另一輪輸出或背景觀測。CSV 未包含呼叫堆疊，HKCU 顯示名稱本身也不足以確認每個程序的實際實體儲存位置。
+
+本機唯讀檢查 Windows 設定套件清單：應用程式宣告的執行檔為 `SystemSettings.exe`，未找到名稱含 `Virtualization` 的宣告。這不構成此內建套件未虛擬化的證明。依 Microsoft 文件，[舊式 UAC registry virtualization](https://learn.microsoft.com/windows/win32/sysinfo/registry-virtualization) 適用範圍不包括本次 x64 程序的 HKCU 目標；但[套件化應用程式的 registry virtualization](https://learn.microsoft.com/en-us/windows/uwp/porting/desktop-to-uwp-behind-the-scenes) 是不同機制，文件所述行為只適用於虛擬化應用程式，不能僅依套件身分推定 SystemSettings 實際如何處理該鍵。原生頁與觀察器的實體位置是否相同仍未確認。
+
+本次試圖透過現有桌面控制啟動原生頁時，應用程式存取授權逾時；沒有繞過授權或以其他自動化介面操作，未修改設定，沒有新的原生組字、通知或同步登錄證據。下一個有效關卡仍是恢復正常互動桌面控制後，在同一次原生切換中同時記錄選項、程序身分、可歸因登錄操作及實際輸出；如果需提升追蹤權限則遵循正常 UAC。未找到符合條件的 C# 候選，不修改產品或發布。
