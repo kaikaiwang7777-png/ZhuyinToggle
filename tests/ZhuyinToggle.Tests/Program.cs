@@ -78,6 +78,10 @@ Check(!ime.Toggle(out _) && ime.Current == ImeSetting.Unknown, "write failure is
 store.FailWrite = false; store.IgnoreWrite = true;
 Check(!ime.Toggle(out _) && ime.Current == ImeSetting.Unknown, "mismatched readback is unknown");
 Check(changes == 5, "notifications for refresh and toggles");
+store.IgnoreWrite = false; store.FailRead = true;
+ime.Refresh();
+Check(ime.Current == ImeSetting.Unknown && ime.Error is not null, "read failure must become unknown without crashing");
+Check(!ime.Toggle(out var readError) && readError is not null && ime.Current == ImeSetting.Unknown, "toggle read failure must be reported without crashing");
 Console.WriteLine("快捷鍵規則與交易式替換測試通過；尚未測試 Windows 快捷鍵註冊。");
 
 sealed class FakeRegistration : IHotkeyRegistration
@@ -96,8 +100,9 @@ sealed class FakeImeStore : IImeStore
 {
     public ImeSetting Value = ImeSetting.Traditional;
     public bool FailWrite;
+    public bool FailRead;
     public bool IgnoreWrite;
-    public ImeSetting Read() => Value;
+    public ImeSetting Read() => FailRead ? throw new IOException("test read failure") : Value;
     public void Write(ImeSetting value)
     {
         if (FailWrite) throw new IOException("test failure");
