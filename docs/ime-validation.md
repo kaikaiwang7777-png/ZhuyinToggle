@@ -140,3 +140,11 @@ B 為 5/5 往返（10/10 有效單向）；C 為 5/5 往返（10/10 有效單向
 [Windows SetFocus](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setfocus) 的目標受呼叫執行緒輸入佇列限制；文件亦描述 `AttachThreadInput`，但這不等於已證明能無損、安全地操作其他程式。程式不使用該方法。[TSF Thread Manager](https://learn.microsoft.com/en-us/windows/win32/tsf/thread-manager) 管理文件與焦點；沒有找到文件支持從獨立工具呼叫自身 manager 即可要求第三方程式重新載入此微軟注音設定。IMM 的一般 context 關聯也不是此設定重新載入的證據。
 
 Chromium 的 [多程序架構](https://www.chromium.org/developers/design-documents/multi-process-architecture/)分離瀏覽器與網頁 renderer；不能假設網頁文字欄位等同此 WinForms 控制項。記事本與 Chrome 的跨程序焦點、組字、游標及繼續輸入競態尚無可靠、安全、非侵入式路線，也未實機驗證。本輪不注入、不強迫切換前景、不模擬 Alt+Tab、不猜測性廣播；正式整合條件尚未達成。
+
+## 執行對話框命令重現（獨立於 PowerShell）
+
+初始背景觀察為 REG_SZ `0x00000000`；專用可丟棄宿主以實際注音鍵位輸出「電腦中國」，並記錄 IME 開始、結果、結束與 TSF 微軟注音設定檔檢查。經 Windows「執行」對話框輸入原始 `reg add` 簡體命令並提交，沒有操作原生設定頁或切換輸入法。回到同一宿主後實際輸出「电脑中国」，組字記錄完成；判讀後才透過「執行」對話框提交原始繁體命令，回到宿主實際輸出「電腦中國」。這是一次輸出往返觀察，不是三次重複驗證，也不是背景或持續前景的產品測試。
+
+簡體命令後，背景觀察器在組字前讀到 REG_SZ `0x00000000`；沒有取得短命 reg.exe 的退出碼、PID、寫入端讀值或直接寫入事件，故不能聲稱設定值確實為 1、命令退出成功或已確定實體位置。輸出觀察顯示本次執行對話框路徑具有繁簡往返現象，但需要具歧義釐清的精確程序／讀寫證據才能確認命令與輸出因果。測試後背景讀到原值 0，實際繁體輸出亦確認。
+
+另外透過「執行」對話框嘗試啟動 `wt.exe -w new new-tab --title "ZT-PS-Repro" --suppressApplicationTitle powershell.exe -NoExit`，但工具視窗清單中未觀察到可操作的專用終端與 PowerShell 提示；沒有輸入識別文字或 PowerShell 命令。可見 PowerShell 組為 NOT TESTED，不能與執行對話框組比較或宣稱重現 Owner 過往 PowerShell 操作。未重做焦點實驗，正式產品未修改。
