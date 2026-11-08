@@ -11,8 +11,10 @@ internal static class Program
     {
         using var mutex = new Mutex(true, @"Local\ZhuyinToggle", out bool created);
         if (!created) { MessageBox.Show("ZhuyinToggle 已在執行。", "ZhuyinToggle"); return; }
+        bool regBackend = args.Contains("--backend", StringComparer.OrdinalIgnoreCase) && args.Zip(args.Skip(1)).Any(p => p.First.Equals("--backend", StringComparison.OrdinalIgnoreCase) && p.Second.Equals("reg-exe", StringComparison.OrdinalIgnoreCase));
+        if (args.Contains("--backend", StringComparer.OrdinalIgnoreCase) && !regBackend) { MessageBox.Show("未知的後端；未啟動。", "ZhuyinToggle"); return; }
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayContext(DiagnosticLog.Create(args.Contains("--diagnostics", StringComparer.OrdinalIgnoreCase))));
+        Application.Run(new TrayContext(DiagnosticLog.Create(args.Contains("--diagnostics", StringComparer.OrdinalIgnoreCase)), regBackend));
     }
 }
 
@@ -45,14 +47,19 @@ internal sealed class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer clickTimer = new() { Interval = SystemInformation.DoubleClickTime };
     private readonly HotkeyCoordinator hotkeys;
     private SettingsForm? form;
+    private bool toggleBusy;
+    private bool stopping;
+    private readonly Control dispatcher = new();
     private static string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZhuyinToggle", "settings.json");
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
-    public TrayContext(DiagnosticLog? diagnostics = null)
+    public TrayContext(DiagnosticLog? diagnostics = null, bool regBackend = false)
     {
         this.diagnostics = diagnostics;
-        ime = new ImeModeService(new RegistryImeStore(), diagnostics);
-        window = new HotkeyWindow(id => { diagnostics?.Write("wm_hotkey", new { id }); ToggleMode("hotkey", id); }, () => ime.Refresh());
+        _ = dispatcher.Handle;
+        ime = new ImeModeService(regBackend ? new RegExeImeStore(diagnostics) : new RegistryImeStore(), diagnostics);
+        diagnostics?.Write("backend", new { value = regBackend ? "reg-exe" : "dotnet" });
+        window = new HotkeyWindow(id => { diagnostics?.Write("wm_hotkey", new { id }); ToggleMode("hotkey", id); }, () => { if (!toggleBusy) ime.Refresh(); });
         hotkeys = new HotkeyCoordinator(new WindowsHotkeyRegistration(window.Handle), SaveHotkey);
         int iconSize = Math.Clamp(SystemInformation.SmallIconSize.Width, 16, 256);
         unknownIcon = TrayIconFactory.Create(OutputState.Unknown, iconSize);
@@ -69,7 +76,7 @@ internal sealed class TrayContext : ApplicationContext
         clickTimer.Tick += (_, _) => { clickTimer.Stop(); ToggleMode("tray"); };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); clickTimer.Start(); } };
         tray.MouseDoubleClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); ShowSettings(); } };
-        ime.Changed += UpdateMode;
+        ime.Changed += () => { if (stopping || dispatcher.IsDisposed) return; if (dispatcher.InvokeRequired) dispatcher.BeginInvoke(UpdateMode); else UpdateMode(); };
         ime.Refresh();
         watcher = new RegistryChangeWatcher(window.NotifySettingChanged, diagnostics);
         Hotkey saved = Load();
@@ -77,14 +84,17 @@ internal sealed class TrayContext : ApplicationContext
             MessageBox.Show("快捷鍵無法註冊，其他功能仍可使用。\n" + error, "ZhuyinToggle", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
-    internal void ToggleMode(string source = "settings", int? hotkeyId = null)
+    internal async void ToggleMode(string source = "settings", int? hotkeyId = null)
     {
+        if (toggleBusy || stopping) { diagnostics?.Write("toggle_ignored", new { source, reason = "busy" }); return; }
         long now = Environment.TickCount64;
         long elapsed = now - lastToggle;
         if (elapsed < 250) { diagnostics?.Write("toggle_ignored", new { source, hotkeyId, elapsedMs = elapsed, thresholdMs = 250 }); return; }
         diagnostics?.Write("toggle_execute", new { source, hotkeyId, elapsedMs = elapsed });
         lastToggle = now;
-        if (!ime.Toggle(out string? error)) MessageBox.Show("無法切換設定：" + error, "ZhuyinToggle", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        toggleBusy = true;
+        try { var result = await Task.Run(() => { bool ok = ime.Toggle(out string? error); return (ok, error); }); if (!stopping && !result.ok) MessageBox.Show("無法切換設定：" + result.error, "ZhuyinToggle", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        finally { toggleBusy = false; if (!stopping) ime.Refresh(); }
     }
     private void UpdateMode()
     {
@@ -137,9 +147,10 @@ internal sealed class TrayContext : ApplicationContext
     private void ShowSettings() { if (form is null || form.IsDisposed) form = new SettingsForm(this); form.Show(); form.Activate(); }
     protected override void ExitThreadCore()
     {
+        stopping = true;
         diagnostics?.Write("shutdown", new { note = "若 3 秒取樣尚未完成，紀錄可能不完整" });
         watcher.Dispose(); hotkeys.Dispose();
-        form?.Dispose(); clickTimer.Dispose(); tray.Visible = false; tray.Dispose(); unknownIcon.Dispose(); traditionalIcon.Dispose(); simplifiedIcon.Dispose(); menu.Dispose(); window.Dispose();
+        form?.Dispose(); clickTimer.Dispose(); tray.Visible = false; tray.Dispose(); unknownIcon.Dispose(); traditionalIcon.Dispose(); simplifiedIcon.Dispose(); menu.Dispose(); window.Dispose(); dispatcher.Dispose();
         base.ExitThreadCore();
     }
     private sealed class HotkeyWindow : NativeWindow, IDisposable
@@ -162,3 +173,4 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern short GetKeyState(int key);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 }
+
